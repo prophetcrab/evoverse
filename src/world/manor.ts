@@ -4,7 +4,7 @@ import type {
 import { SEEDS, WORLD_INFO } from '../sim/scenario'
 
 /**
- * 庄园场景（120 × 80，四层）：
+ * 庄园场景（布局 120 × 80，对外压缩为 80 × 54，四层）：
  *   L0 地下 —— 庄园酒窖（建筑下方，分四间）与独立地窖（花园下方，两室），互不连通
  *   L1 地面 —— 花园 + 庄园一层（门厅、大厅、餐厅、书房、厨房等）
  *   L2 二层 —— 主卧、客房、育儿室与两侧起居室
@@ -14,6 +14,9 @@ import { SEEDS, WORLD_INFO } from '../sim/scenario'
 
 const W = 120
 const H = 80
+/** 压缩后的对外尺寸：保持四层与全部区域，密度的 2/3 缩放。 */
+const CW = 80
+const CH = 54
 
 const L_BASE = 0
 const L_GROUND = 1
@@ -416,9 +419,90 @@ export function createManorWorld(): World {
     fixtures,
     round: 0,
   }
-  return world
+  return compressManor(world)
+}
+
+function compressManor(base: World): World {
+  const indexNew = (layer: number, x: number, y: number): number => (layer * CH + y) * CW + x
+  const indexOld = (layer: number, x: number, y: number): number => (layer * H + y) * W + x
+  const mapX = (x: number): number => Math.max(0, Math.min(CW - 1, Math.round(x * CW / W)))
+  const mapY = (y: number): number => Math.max(0, Math.min(CH - 1, Math.round(y * CH / H)))
+  const mapCoord = (c: { layer: number; x: number; y: number }): { layer: number; x: number; y: number } => ({
+    layer: c.layer, x: mapX(c.x), y: mapY(c.y),
+  })
+
+  const cells: Cell[] = Array.from({ length: CW * CH * 4 }, () => ({ terrain: 'void', stair: null }))
+  for (let layer = 0; layer < 4; layer += 1) {
+    for (let y = 0; y < CH; y += 1) {
+      for (let x = 0; x < CW; x += 1) {
+        const ox = Math.max(0, Math.min(W - 1, Math.round(x * W / CW)))
+        const oy = Math.max(0, Math.min(H - 1, Math.round(y * H / CH)))
+        const source = base.cells[indexOld(layer, ox, oy)]
+        cells[indexNew(layer, x, y)] = { terrain: source.terrain, stair: null, zone: source.zone }
+      }
+    }
+  }
+
+  const ensureFloor = (c: { layer: number; x: number; y: number }): void => {
+    const cell = cells[indexNew(c.layer, c.x, c.y)]
+    if (cell.terrain === 'void' || cell.terrain === 'wall' || cell.terrain === 'window') {
+      cell.terrain = 'floor'
+    }
+  }
+
+  // 楼梯先按缩放坐标重建，避免下采样丢掉垂直边
+  for (let layer = 0; layer < 4; layer += 1) {
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < W; x += 1) {
+        const source = base.cells[indexOld(layer, x, y)]
+        if (!source.stair) continue
+        const at = mapCoord({ layer, x, y })
+        ensureFloor(at)
+        ensureFloor({ layer: source.stair.to, x: at.x, y: at.y })
+        cells[indexNew(at.layer, at.x, at.y)].stair = { to: source.stair.to, state: source.stair.state }
+        cells[indexNew(source.stair.to, at.x, at.y)].stair = { to: at.layer, state: source.stair.state }
+      }
+    }
+  }
+
+  const characters: Character[] = base.characters.map(character => {
+    const pos = mapCoord(character.pos)
+    ensureFloor(pos)
+    return { ...character, pos }
+  })
+  const info: InfoEntry[] = base.info.map(entry => ({ ...entry, origin: mapCoord(entry.origin) }))
+  const items: WorldItem[] = (base.items ?? []).map(item => {
+    if (!item.at) return { ...item }
+    const at = mapCoord(item.at)
+    ensureFloor(at)
+    return { ...item, at }
+  })
+  const fixtures: WorldFixture[] = (base.fixtures ?? []).map(fixture => {
+    const at = mapCoord(fixture.at)
+    ensureFloor(at)
+    return { ...fixture, at }
+  })
+
+  const safe = base.safeBounds
+  return {
+    ...base,
+    width: CW,
+    height: CH,
+    seedLayout: { width: W, height: H },
+    cells,
+    characters,
+    info,
+    items,
+    fixtures,
+    safeBounds: safe ? {
+      layer: safe.layer,
+      x0: mapX(safe.x0), y0: mapY(safe.y0),
+      x1: mapX(safe.x1), y1: mapY(safe.y1),
+    } : undefined,
+    round: 0,
+  }
 }
 
 export function manorBounds(): { width: number; height: number; layers: number } {
-  return { width: W, height: H, layers: 4 }
+  return { width: CW, height: CH, layers: 4 }
 }

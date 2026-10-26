@@ -208,6 +208,7 @@ class WorldRuntime {
         lastThought: character.lastThought,
         lastAction: character.lastAction,
         inventory: character.inventory,
+        statuses: character.statuses,
       })),
       items: world.items ?? [],
       fixtures: world.fixtures ?? [],

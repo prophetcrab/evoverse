@@ -21,6 +21,17 @@ export type Stance = '亲近' | '中立' | '戒备' | '敌意' | '畏惧'
 
 export type AbilityStateName = '稳定' | '亢进' | '暴走' | '封印'
 
+export type StatusKind =
+  | 'burning' | 'frozen' | 'stunned' | 'rooted'
+  | 'slowed' | 'blinded' | 'calm' | 'suggested'
+
+export interface StatusEffect {
+  kind: StatusKind
+  /** 到这一轮结束前有效（含） */
+  until: number
+  source?: EntityId
+}
+
 /** 角色的能力状态：名称、等级、负荷与当前状态。 */
 export interface AbilityState {
   name: string
@@ -71,6 +82,8 @@ export interface SimCharacter {
   attitudes: Record<EntityId, Attitude>
   relations: Record<EntityId, Relation>
   presentation: { description: string; overrides: boolean; at: number }
+  /** 状态效果：燃烧、冻结、眩晕、定身等 */
+  statuses: StatusEffect[]
   /** 携带的物品 id */
   inventory: string[]
   memory: MemoryEntry[]
@@ -90,7 +103,7 @@ export type AbilityScope = 'self' | 'other' | 'world' | 'info'
 export type InteractVerb = 'open' | 'close' | 'lock' | 'unlock' | 'break' | 'write' | 'read' | 'toggle'
 
 export interface Ability {
-  scope: AbilityScope
+  scope?: AbilityScope
   name: string
   text?: string
   topics?: string[]

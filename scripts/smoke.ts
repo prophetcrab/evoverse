@@ -120,13 +120,24 @@ const assert = (condition: unknown, message: string): void => {
   const moveMind = createLlmMind(async () => JSON.stringify({
     thoughts: [],
     intention: {
-      kind: 'tell', targetEntity: 'kirisame-ren', moveTo: { layer: 1, x: 58, y: 77 },
+      kind: 'tell', targetEntity: 'kirisame-ren', moveTo: { layer: 1, x: 39, y: 52 },
       text: '走过去说', behavior: '走近传话', polarity: 'neutral',
     },
     patch: null,
   }))
   const moved = await moveMind.think({ self, digest: [], visible: [], location: { name: '测试', note: '' }, moves: [], items: [], fixtures: [], round: 1 })
-  assert(moved.intention?.moveTo?.y === 77, 'LLM 解析移动+行为 moveTo')
+  assert(moved.intention?.moveTo?.y === 52, 'LLM 解析移动+行为 moveTo')
+
+  const abilitySpecMind = createLlmMind(async () => JSON.stringify({
+    thoughts: [],
+    intention: {
+      kind: 'ability', ability: { name: '发火' }, targetEntity: 'kirisame-ren',
+      behavior: '对会长发火', polarity: 'harm',
+    },
+    patch: null,
+  }))
+  const abilitySpec = await abilitySpecMind.think({ self, digest: [], visible: [], location: { name: '测试', note: '' }, moves: [], items: [], fixtures: [], round: 1 })
+  assert(abilitySpec.intention?.ability?.name === '发火' && abilitySpec.intention.targetEntity === 'kirisame-ren', 'LLM 解析角色能力 tool call')
 }
 
 // 4. 校门越界死亡 + 尸体随机刷新 + 无门
@@ -135,7 +146,7 @@ const assert = (condition: unknown, message: string): void => {
   assert(world.cells.every(cell => cell.terrain !== 'door'), '地图中没有门格')
   const victim = world.characters.find(character => character.id === 'kirisame-ren')
   if (!victim) throw new Error('missing victim')
-  victim.pos = { layer: 1, x: 58, y: 77 }
+  victim.pos = { layer: 1, x: 39, y: 52 }
   const mind: Mind = {
     async feel() { return { remember: [] } },
     async think({ self }) {
@@ -145,7 +156,7 @@ const assert = (condition: unknown, message: string): void => {
           intention: {
             actor: self.id,
             kind: 'move',
-            targetCell: { layer: 1, x: 58, y: 78 },
+            targetCell: { layer: 1, x: 39, y: 53 },
             behavior: '走出校门',
             polarity: 'neutral',
           },
@@ -174,7 +185,7 @@ const assert = (condition: unknown, message: string): void => {
   const world = createManorWorld()
   const walker = world.characters.find(character => character.id === 'kirisame-hayato')
   if (!walker) throw new Error('missing walker')
-  walker.pos = { layer: 1, x: 58, y: 74 }
+  walker.pos = { layer: 1, x: 39, y: 49 }
   const mind: Mind = {
     async feel() { return { remember: [] } },
     async think({ self }) {
@@ -184,7 +195,7 @@ const assert = (condition: unknown, message: string): void => {
           intention: {
             actor: self.id,
             kind: 'move',
-            targetCell: { layer: 1, x: 58, y: 77 },
+            targetCell: { layer: 1, x: 39, y: 52 },
             behavior: '向前走三格',
             polarity: 'neutral',
           },
@@ -197,13 +208,13 @@ const assert = (condition: unknown, message: string): void => {
   const engine = createEngine(world, mind)
   await engine.step()
   const after = engine.view().characters.find(character => character.id === 'kirisame-hayato')
-  assert(after?.pos.x === 58 && after.pos.y === 77, '三格移动成功')
+  assert(after?.pos.y === 52, '三格移动成功')
 }
 {
   const world = createManorWorld()
   const walker = world.characters.find(character => character.id === 'kirisame-hayato')
   if (!walker) throw new Error('missing walker')
-  walker.pos = { layer: 1, x: 58, y: 74 }
+  walker.pos = { layer: 1, x: 39, y: 50 }
   const mind: Mind = {
     async feel() { return { remember: [] } },
     async think({ self }) {
@@ -213,7 +224,7 @@ const assert = (condition: unknown, message: string): void => {
           intention: {
             actor: self.id,
             kind: 'move',
-            targetCell: { layer: 1, x: 58, y: 66 },
+            targetCell: { layer: 1, x: 39, y: 42 },
             behavior: '往长走廊走',
             polarity: 'neutral',
           },
@@ -226,7 +237,7 @@ const assert = (condition: unknown, message: string): void => {
   const engine = createEngine(world, mind)
   await engine.step()
   const after = engine.view().characters.find(character => character.id === 'kirisame-hayato')
-  assert(after?.pos.y === 68, '超过 6 格时向目标走 6 格')
+  assert(after?.pos.y === 44, '超过 6 格时向目标走 6 格')
 }
 
 // 5.5 目标落在墙里：不直接失败，向最近的可达格移动
@@ -234,7 +245,7 @@ const assert = (condition: unknown, message: string): void => {
   const world = createManorWorld()
   const actor = world.characters.find(character => character.id === 'kirisame-genzo')
   if (!actor) throw new Error('missing actor')
-  actor.pos = { layer: 1, x: 92, y: 20 }
+  actor.pos = { layer: 1, x: 61, y: 14 }
   const mind: Mind = {
     async feel() { return { remember: [] } },
     async think({ self }) {
@@ -242,7 +253,7 @@ const assert = (condition: unknown, message: string): void => {
         ? {
           thoughts: [],
           intention: {
-            actor: self.id, kind: 'move', targetCell: { layer: 0, x: 95, y: 20 },
+            actor: self.id, kind: 'move', targetCell: { layer: 0, x: 63, y: 14 },
             behavior: '朝地下室走', polarity: 'neutral',
           },
           patch: null,
@@ -254,7 +265,7 @@ const assert = (condition: unknown, message: string): void => {
   const engine = createEngine(world, mind)
   await engine.step()
   const after = engine.view().characters.find(character => character.id === 'kirisame-genzo')
-  assert(after?.pos.layer === 1 && (after.pos.x !== 92 || after.pos.y !== 20), '目标在墙里时向最近可达格移动')
+  assert(after?.pos.layer === 1 && (after.pos.x !== 61 || after.pos.y !== 14), '目标在墙里时向最近可达格移动')
   for (let round = 2; round <= 8; round += 1) await engine.step()
   const later = engine.view().characters.find(character => character.id === 'kirisame-genzo')
   assert(later?.pos.layer === 0, '墙目标经楼梯寻路到达目标层')
@@ -299,8 +310,8 @@ const assert = (condition: unknown, message: string): void => {
   const actor = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const target = world.characters.find(character => character.id === 'kirisame-ren')
   if (!actor || !target) throw new Error('missing characters')
-  actor.pos = { layer: 1, x: 58, y: 74 }
-  target.pos = { layer: 1, x: 59, y: 74 }
+  actor.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 40, y: 50 }
   const mind: Mind = {
     async feel() { return { remember: [] } },
     async think({ self }) {
@@ -333,7 +344,7 @@ const assert = (condition: unknown, message: string): void => {
   const actor = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const target = world.characters.find(character => character.id === 'kirisame-ren')
   if (!actor || !target) throw new Error('missing characters')
-  actor.pos = { layer: 3, x: 90, y: 30 }
+  actor.pos = { layer: 3, x: 60, y: 20 }
   const mind: Mind = {
     async feel() { return { remember: [] } },
     async think({ self }) {
@@ -358,8 +369,8 @@ const assert = (condition: unknown, message: string): void => {
   const actor = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const target = world.characters.find(character => character.id === 'kirisame-ren')
   if (!actor || !target) throw new Error('missing characters')
-  actor.pos = { layer: 1, x: 58, y: 74 }
-  target.pos = { layer: 1, x: 59, y: 74 }
+  actor.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 40, y: 50 }
   const crowbar = world.items?.find(item => item.id === 'item-crowbar')
   if (!crowbar) throw new Error('missing crowbar')
   crowbar.holder = actor.id
@@ -388,7 +399,7 @@ const assert = (condition: unknown, message: string): void => {
   const world = createManorWorld()
   const actor = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   if (!actor) throw new Error('missing actor')
-  actor.pos = { layer: 1, x: 58, y: 74 }
+  actor.pos = { layer: 1, x: 39, y: 50 }
   const crowbar = world.items?.find(item => item.id === 'item-crowbar')
   if (!crowbar) throw new Error('missing crowbar')
   crowbar.holder = actor.id
@@ -409,7 +420,7 @@ const assert = (condition: unknown, message: string): void => {
   const engine = createEngine(world, mind)
   await engine.step()
   const item = engine.world().items?.find(entry => entry.id === 'item-crowbar')
-  assert(item?.at?.x === 58 && item.at.y === 74 && item.holder === undefined, '放下物品到当前格')
+  assert(item?.at?.x === 39 && item.at.y === 50 && item.holder === undefined, '放下物品到当前格')
 }
 
 // 9. 设施：钥匙解锁、开柜取物
@@ -470,8 +481,8 @@ const assert = (condition: unknown, message: string): void => {
   const shooter = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const target = world.characters.find(character => character.id === 'kirisame-ren')
   if (!shooter || !target) throw new Error('missing characters')
-  shooter.pos = { layer: 1, x: 58, y: 74 }
-  target.pos = { layer: 1, x: 61, y: 74 }
+  shooter.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 42, y: 50 }
   const gun = world.items?.find(item => item.id === 'item-signal-gun')
   if (!gun) throw new Error('missing gun')
   gun.holder = shooter.id
@@ -503,8 +514,8 @@ const assert = (condition: unknown, message: string): void => {
   const shooter = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const target = world.characters.find(character => character.id === 'kirisame-ren')
   if (!shooter || !target) throw new Error('missing characters')
-  shooter.pos = { layer: 1, x: 58, y: 74 }
-  target.pos = { layer: 1, x: 59, y: 74 }
+  shooter.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 40, y: 50 }
   const gun = world.items?.find(item => item.id === 'item-signal-gun')
   const shield = world.items?.find(item => item.id === 'item-riot-shield')
   if (!gun || !shield) throw new Error('missing equipment')
@@ -539,8 +550,8 @@ const assert = (condition: unknown, message: string): void => {
   const shooter = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const target = world.characters.find(character => character.id === 'kirisame-ren')
   if (!shooter || !target) throw new Error('missing characters')
-  shooter.pos = { layer: 1, x: 58, y: 74 }
-  target.pos = { layer: 1, x: 60, y: 74 }
+  shooter.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 41, y: 50 }
   const axe = world.items?.find(item => item.id === 'item-fire-axe')
   if (!axe) throw new Error('missing axe')
   axe.holder = shooter.id
@@ -573,8 +584,8 @@ const assert = (condition: unknown, message: string): void => {
   const mover = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const blocker = world.characters.find(character => character.id === 'kirisame-ren')
   if (!mover || !blocker) throw new Error('missing characters')
-  mover.pos = { layer: 1, x: 58, y: 74 }
-  blocker.pos = { layer: 1, x: 58, y: 75 }
+  mover.pos = { layer: 1, x: 39, y: 49 }
+  blocker.pos = { layer: 1, x: 39, y: 50 }
   const mind: Mind = {
     async feel() { return { remember: [] } },
     async think({ self }) {
@@ -582,7 +593,7 @@ const assert = (condition: unknown, message: string): void => {
         ? {
           thoughts: [],
           intention: {
-            actor: self.id, kind: 'move', targetCell: { layer: 1, x: 58, y: 76 },
+            actor: self.id, kind: 'move', targetCell: { layer: 1, x: 39, y: 51 },
             behavior: '向前走', polarity: 'neutral',
           },
           patch: null,
@@ -594,7 +605,7 @@ const assert = (condition: unknown, message: string): void => {
   const engine = createEngine(world, mind)
   await engine.step()
   const after = engine.view().characters.find(character => character.id === 'kirisame-ryunosuke')
-  assert(after?.pos.y === 76, '绕开中间的人继续前进')
+  assert(after?.pos.y === 51, '绕开中间的人继续前进')
 }
 
 // 12. 能力暴走反噬
@@ -633,9 +644,9 @@ const assert = (condition: unknown, message: string): void => {
   const attacker = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const victim = world.characters.find(character => character.id === 'kirisame-transfer')
   if (!helper || !attacker || !victim) throw new Error('missing characters')
-  helper.pos = { layer: 1, x: 58, y: 74 }
-  attacker.pos = { layer: 1, x: 59, y: 74 }
-  victim.pos = { layer: 1, x: 60, y: 74 }
+  helper.pos = { layer: 1, x: 39, y: 50 }
+  attacker.pos = { layer: 1, x: 40, y: 50 }
+  victim.pos = { layer: 1, x: 41, y: 50 }
   const mind: Mind = {
     async feel() { return { remember: [] } },
     async think({ self }) {
@@ -675,8 +686,8 @@ const assert = (condition: unknown, message: string): void => {
   const actor = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const observer = world.characters.find(character => character.id === 'kirisame-ren')
   if (!actor || !observer) throw new Error('missing characters')
-  actor.pos = { layer: 1, x: 58, y: 74 }
-  observer.pos = { layer: 1, x: 59, y: 74 }
+  actor.pos = { layer: 1, x: 39, y: 50 }
+  observer.pos = { layer: 1, x: 40, y: 50 }
   let visibleIds: string[] = []
   const mind: Mind = {
     async feel(input) {
@@ -702,8 +713,8 @@ const assert = (condition: unknown, message: string): void => {
   const speaker = world.characters.find(character => character.id === 'kirisame-saya')
   const listener = world.characters.find(character => character.id === 'kirisame-ren')
   if (!speaker || !listener) throw new Error('missing characters')
-  speaker.pos = { layer: 1, x: 58, y: 74 }
-  listener.pos = { layer: 1, x: 59, y: 74 }
+  speaker.pos = { layer: 1, x: 39, y: 50 }
+  listener.pos = { layer: 1, x: 40, y: 50 }
   const heard: Array<{ content: string; sourceName?: string }> = []
   const mind: Mind = {
     async feel(input) {
@@ -735,8 +746,8 @@ const assert = (condition: unknown, message: string): void => {
   const actor = world.characters.find(character => character.id === 'kirisame-ryunosuke')
   const target = world.characters.find(character => character.id === 'kirisame-ren')
   if (!actor || !target) throw new Error('missing characters')
-  actor.pos = { layer: 1, x: 58, y: 74 }
-  target.pos = { layer: 1, x: 58, y: 78 }
+  actor.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 39, y: 53 }
   const mind: Mind = {
     async feel() { return { remember: [] } },
     async think({ self }) {
@@ -747,7 +758,7 @@ const assert = (condition: unknown, message: string): void => {
             actor: self.id,
             kind: 'tell',
             targetEntity: 'kirisame-ren',
-            moveTo: { layer: 1, x: 58, y: 77 },
+            moveTo: { layer: 1, x: 39, y: 52 },
             text: '测试移动后传话',
             behavior: '走近后说',
             polarity: 'neutral',
@@ -762,8 +773,165 @@ const assert = (condition: unknown, message: string): void => {
   await engine.step()
   const mover = engine.view().characters.find(character => character.id === 'kirisame-ryunosuke')
   const receiver = engine.view().characters.find(character => character.id === 'kirisame-ren')
-  assert(mover?.pos.y === 77, '先移动到行为位置')
+  assert(mover?.pos.y === 52, '先移动到行为位置')
   assert(receiver?.memory.some(entry => entry.content === '测试移动后传话') === true, '移动后行为生效')
+}
+
+// 17. 能力 tool call：发火造成伤害 + 燃烧持续伤害
+{
+  const world = createManorWorld()
+  const actor = world.characters.find(character => character.id === 'kirisame-hino')
+  const target = world.characters.find(character => character.id === 'kirisame-ren')
+  if (!actor || !target) throw new Error('missing characters')
+  actor.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 40, y: 50 }
+  const mind: Mind = {
+    async feel() { return { remember: [] } },
+    async think({ self, round }) {
+      return self.id === 'kirisame-hino' && round === 1
+        ? {
+          thoughts: [],
+          intention: {
+            actor: self.id, kind: 'ability',
+            ability: { name: '发火' },
+            targetEntity: 'kirisame-ren',
+            behavior: '对会长发火', polarity: 'harm',
+          },
+          patch: null,
+        }
+        : { thoughts: [], intention: null, patch: null }
+    },
+    async act({ intention }) { return { action: intention } },
+  }
+  const engine = createEngine(world, mind)
+  const state = engine.view().characters.find(character => character.id === 'kirisame-hino')
+  if (state) { state.ability.charge = 0; state.ability.state = '稳定' }
+  await engine.step()
+  let after = engine.view().characters.find(character => character.id === 'kirisame-ren')
+  assert(after?.vitals.hp === 3, '发火能力造成 2 点伤害')
+  assert(after?.statuses.some(status => status.kind === 'burning') === true, '发火附加燃烧')
+  await engine.step()
+  after = engine.view().characters.find(character => character.id === 'kirisame-ren')
+  assert(after?.vitals.hp === 2, '燃烧在下一回合持续造成伤害')
+}
+
+// 18. 防御能力减伤
+{
+  const world = createManorWorld()
+  const actor = world.characters.find(character => character.id === 'kirisame-hino')
+  const target = world.characters.find(character => character.id === 'kirisame-ryunosuke')
+  if (!actor || !target) throw new Error('missing characters')
+  actor.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 40, y: 50 }
+  const mind: Mind = {
+    async feel() { return { remember: [] } },
+    async think({ self }) {
+      return self.id === 'kirisame-hino'
+        ? {
+          thoughts: [],
+          intention: {
+            actor: self.id, kind: 'ability', ability: { name: '发火' }, targetEntity: 'kirisame-ryunosuke',
+            behavior: '攻击灰谷', polarity: 'harm',
+          },
+          patch: null,
+        }
+        : { thoughts: [], intention: null, patch: null }
+    },
+    async act({ intention }) { return { action: intention } },
+  }
+  const engine = createEngine(world, mind)
+  const state = engine.view().characters.find(character => character.id === 'kirisame-hino')
+  if (state) { state.ability.charge = 0; state.ability.state = '稳定' }
+  await engine.step()
+  const after = engine.view().characters.find(character => character.id === 'kirisame-ryunosuke')
+  assert(after?.vitals.hp === 4, '硬化减伤 1 点')
+}
+
+// 19. 治疗/控制/暴走不额外反噬
+{
+  const world = createManorWorld()
+  const healer = world.characters.find(character => character.id === 'kirisame-kanade')
+  if (!healer) throw new Error('missing healer')
+  const mind: Mind = {
+    async feel() { return { remember: [] } },
+    async think({ self }) {
+      return self.id === 'kirisame-kanade'
+        ? {
+          thoughts: [],
+          intention: {
+            actor: self.id, kind: 'ability', ability: { name: '治愈' },
+            behavior: '治疗自己', polarity: 'help',
+          },
+          patch: null,
+        }
+        : { thoughts: [], intention: null, patch: null }
+    },
+    async act({ intention }) { return { action: intention } },
+  }
+  const engine = createEngine(world, mind)
+  const state = engine.view().characters.find(character => character.id === 'kirisame-kanade')
+  if (state) state.vitals.hp = 4
+  await engine.step()
+  const after = engine.view().characters.find(character => character.id === 'kirisame-kanade')
+  assert(after?.vitals.hp === 5, '治愈恢复 1 点生命')
+}
+{
+  const world = createManorWorld()
+  const actor = world.characters.find(character => character.id === 'kirisame-rin')
+  const target = world.characters.find(character => character.id === 'kirisame-ren')
+  if (!actor || !target) throw new Error('missing characters')
+  actor.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 40, y: 50 }
+  const mind: Mind = {
+    async feel() { return { remember: [] } },
+    async think({ self }) {
+      return self.id === 'kirisame-rin'
+        ? {
+          thoughts: [],
+          intention: {
+            actor: self.id, kind: 'ability', ability: { name: '暗示' }, targetEntity: 'kirisame-ren',
+            behavior: '暗示会长', polarity: 'neutral',
+          },
+          patch: null,
+        }
+        : { thoughts: [], intention: null, patch: null }
+    },
+    async act({ intention }) { return { action: intention } },
+  }
+  const engine = createEngine(world, mind)
+  await engine.step()
+  const after = engine.view().characters.find(character => character.id === 'kirisame-ren')
+  assert(after?.statuses.some(status => status.kind === 'suggested') === true, '暗示附加状态')
+}
+{
+  const world = createManorWorld()
+  const actor = world.characters.find(character => character.id === 'kirisame-ren')
+  const target = world.characters.find(character => character.id === 'kirisame-hino')
+  if (!actor || !target) throw new Error('missing characters')
+  actor.pos = { layer: 1, x: 39, y: 50 }
+  target.pos = { layer: 1, x: 40, y: 50 }
+  const mind: Mind = {
+    async feel() { return { remember: [] } },
+    async think({ self }) {
+      return self.id === 'kirisame-ren'
+        ? {
+          thoughts: [],
+          intention: {
+            actor: self.id, kind: 'ability', ability: { name: '重力' }, targetEntity: 'kirisame-hino',
+            behavior: '压制火野', polarity: 'harm',
+          },
+          patch: null,
+        }
+        : { thoughts: [], intention: null, patch: null }
+    },
+    async act({ intention }) { return { action: intention } },
+  }
+  const engine = createEngine(world, mind)
+  const state = engine.view().characters.find(character => character.id === 'kirisame-ren')
+  if (state) { state.ability.charge = 100; state.ability.state = '暴走' }
+  await engine.step()
+  const after = engine.view().characters.find(character => character.id === 'kirisame-ren')
+  assert(after?.vitals.hp === 5, '暴走状态使用能力不再每回合反噬')
 }
 
 console.log('smoke: all checks passed')

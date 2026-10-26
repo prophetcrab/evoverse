@@ -104,6 +104,8 @@ export interface World {
   zones?: Record<string, { name: string; note: string }>
   /** 安全边界；越界移动即死亡（仅对该层生效） */
   safeBounds?: { layer: number; x0: number; y0: number; x1: number; y1: number }
+  /** 压缩地图的原始布局尺寸；用于把种子目标坐标缩放到当前网格 */
+  seedLayout?: { width: number; height: number }
   /** 索引：layer * height * width + y * width + x */
   cells: Cell[]
   characters: Character[]

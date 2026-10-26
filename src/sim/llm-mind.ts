@@ -1,5 +1,6 @@
 import type { AbilityScope, Attitude, Goal, Mind, SimAction, Stance, StatePatch } from './types'
 import type { Coord } from '../world/types'
+import { abilitySpecFor } from './abilities'
 import { ACTION_TOOLS } from './tools'
 import type { CallPhase } from './usage'
 
@@ -116,21 +117,30 @@ function normalizeActionBase(actor: string, raw: unknown): SimAction | null {
     const raw = data.ability !== null && typeof data.ability === 'object'
       ? data.ability as Record<string, unknown>
       : data
-    const scope: AbilityScope | null = typeof raw.scope === 'string' && SCOPES.has(raw.scope)
+    const scope: AbilityScope | undefined = typeof raw.scope === 'string' && SCOPES.has(raw.scope)
       ? raw.scope as AbilityScope
-      : null
+      : undefined
     const name = typeof raw.name === 'string' ? raw.name : null
-    if (!scope || !name) return null
+    if (!name) return null
     const targetEntity = typeof data.targetEntity === 'string'
       ? data.targetEntity
       : typeof raw.targetEntity === 'string' ? raw.targetEntity : undefined
-    if (scope === 'other' && !targetEntity) return null
+    const targetCell = cellOf(data.targetCell) ?? cellOf(raw.targetCell)
+    const fixtureId = typeof data.fixtureId === 'string'
+      ? data.fixtureId
+      : typeof raw.fixtureId === 'string' ? raw.fixtureId : undefined
+    const itemId = typeof data.itemId === 'string'
+      ? data.itemId
+      : typeof raw.itemId === 'string' ? raw.itemId : undefined
     return {
       actor,
       kind,
       behavior,
       polarity,
       targetEntity,
+      targetCell,
+      fixtureId,
+      itemId,
       ability: { scope, name, text: typeof raw.text === 'string' ? raw.text : undefined, topics: strings(raw.topics) },
     }
   }
@@ -222,6 +232,7 @@ function stateBlock(self: {
   goals: Array<{ id: string; text: string; status: string; weight: number }>
   attention: Record<string, number>
   presentation: { description: string }
+  statuses?: Array<{ kind: string; until: number }>
 }): string {
   const needs = Object.entries(self.needs).map(([key, value]) => `${key}=${Math.round(value)}`).join('，')
   const goals = self.goals.map(goal => `[${goal.id}] ${goal.text}（${goal.status}，权重 ${goal.weight}）`).join('；') || '无'
@@ -229,11 +240,33 @@ function stateBlock(self: {
     .sort((a, b) => b[1] - a[1])
     .map(([topic, weight]) => `${topic}:${weight}`)
     .join('，')
-  return `【状态】\n需求：${needs}\n目标：${goals}\n关注：${attention || '无'}\n表现：${self.presentation.description}`
+  const statuses = (self.statuses ?? []).map(status => `${status.kind}（至 R${status.until}）`).join('、') || '无'
+  return `【状态】\n需求：${needs}\n目标：${goals}\n关注：${attention || '无'}\n身体状态：${statuses}\n表现：${self.presentation.description}`
 }
 
 const attitudeOf = (attitudes: Record<string, Attitude>, id: string): Attitude =>
   attitudes[id] ?? { trust: 0, fear: 0 }
+
+const STATUS_LABEL: Record<string, string> = {
+  burning: '燃烧', frozen: '冻结', stunned: '眩晕', rooted: '定身',
+  slowed: '减速', blinded: '致盲', calm: '冷静', suggested: '暗示',
+}
+const TARGET_LABEL: Record<string, string> = {
+  self: '自己', character: '角色', cell: '格子', fixture: '设施', item: '物品',
+}
+
+function abilityBlock(self: { id: string; ability: { state: string; charge: number } }): string {
+  const spec = abilitySpecFor(self.id)
+  if (!spec) return '【你的能力】无'
+  const effect = [
+    spec.damage ? `伤害 ${spec.damage}` : '',
+    spec.heal ? `治疗 ${spec.heal}` : '',
+    spec.status ? `附加 ${STATUS_LABEL[spec.status] ?? spec.status} ${spec.duration ?? 1} 回合` : '',
+    spec.defense ? `减伤 ${spec.defense}` : '',
+    spec.cleanse ? '清除状态' : '',
+  ].filter(Boolean).join('，')
+  return `【你的能力】${spec.name}（${spec.kind}，射程 ${spec.range}，目标：${TARGET_LABEL[spec.target] ?? spec.target}${effect ? `；${effect}` : ''}）\n${spec.description}\n当前：${self.ability.state}，负荷 ${self.ability.charge}。当能力能推进目标、保护自己、获取信息或制服威胁时就使用，不要因为负荷而完全不用；负荷到 80 才暴走。`
+}
 
 export function createLlmMind(complete: Complete): Mind {
   return {
@@ -274,6 +307,7 @@ export function createLlmMind(complete: Complete): Mind {
       const memory = input.self.memory
       const prompt = [
         stateBlock(input.self),
+        abilityBlock(input.self),
         `【所在位置】${input.location.name}：${input.location.note}`,
         `【这一轮你能走到的地方】（最多 6 步，可拐弯；move 的 targetCell 必须从这里选）`,
         list(input.moves.map(move => `L${move.pos.layer} (${move.pos.x},${move.pos.y}) ${move.name}`)),
@@ -305,7 +339,7 @@ export function createLlmMind(complete: Complete): Mind {
         `同时给出你对别人的态度变化：立场从「亲近 / 中立 / 戒备 / 敌意 / 畏惧」里选，再写一句自然语言描述。`,
         `输出 JSON：
 {"thoughts":[{"content":"...","topics":["..."],"derivedFrom":["versionId"]}],
- "intention":{"kind":"move|speak|tell|attack|ability|take|drop|give|use|interact|assist|idle","targetEntity":"<实体id>","targetCell":{"layer":0,"x":0,"y":0},"moveTo":{"layer":0,"x":0,"y":0},"itemId":"<物品id>","fixtureId":"<设施id>","verb":"open|close|lock|unlock|break|write|read|toggle","text":"可选","topics":["..."],"mode":"告知|询问|请求|威胁","sourceVersion":"转述时你记忆里的 versionId","method":"徒手|武器|推搡","ability":{"scope":"self|other|world|info","name":"...","text":"...","topics":["..."]},"behavior":"一句行为名","polarity":"help|harm|neutral"} | null,
+ "intention":{"kind":"move|speak|tell|attack|ability|take|drop|give|use|interact|assist|idle","targetEntity":"<实体id>","targetCell":{"layer":0,"x":0,"y":0},"moveTo":{"layer":0,"x":0,"y":0},"itemId":"<物品id>","fixtureId":"<设施id>","verb":"open|close|lock|unlock|break|write|read|toggle","text":"可选","topics":["..."],"mode":"告知|询问|请求|威胁","sourceVersion":"转述时你记忆里的 versionId","method":"徒手|武器|推搡","ability":{"name":"你的能力名","scope":"可选","targetCell":{"layer":0,"x":0,"y":0},"fixtureId":"可选","itemId":"可选","text":"可选","topics":["..."]},"behavior":"一句行为名","polarity":"help|harm|neutral"} | null,
  "patch":{"attitudes":[{"target":"<实体id>","stance":"亲近|中立|戒备|敌意|畏惧","text":"一句话描述"}],"attention":[{"topic":"...","weight":0-1000}],"goals":[{"id":"<目标id>","status":"active|blocked|done"}],"needs":{"safety":-40,"status":0,"curiosity":-60},"presentation":{"description":"...","overrides":false},"rationale":"..."} | null}`,
       ].join('\n')
 
@@ -340,6 +374,7 @@ export function createLlmMind(complete: Complete): Mind {
       if (intention.kind === 'idle') return { action: null }
       const prompt = [
         stateBlock(self),
+        abilityBlock(self),
         `【你刚决定的意图】${JSON.stringify(intention)}`,
         `【这一轮你能走到的地方】（最多 6 步，move 的 targetCell 必须从这里选）`,
         list(moves.map(move => `L${move.pos.layer} (${move.pos.x},${move.pos.y}) ${move.name}`)),
@@ -356,7 +391,7 @@ export function createLlmMind(complete: Complete): Mind {
         `【可用工具】`,
         ACTION_TOOLS.map(tool => `- ${tool.name}：${tool.description}`).join('\n'),
         `把意图落成一次工具调用。可以微调参数，但不要改变目标；targetEntity 用实体 id，itemId/fixtureId 保持原 id，moveTo 保持原坐标；如果这个意图无法执行，返回 {"action":null}。`,
-        `输出 JSON：{"action":{"kind":"move|speak|tell|attack|ability|take|drop|give|use|interact|assist|idle","targetEntity":"<实体id>","targetCell":{"layer":0,"x":0,"y":0},"moveTo":{"layer":0,"x":0,"y":0},"itemId":"<物品id>","fixtureId":"<设施id>","verb":"open|close|lock|unlock|break|write|read|toggle","text":"可选","topics":["..."],"mode":"告知|询问|请求|威胁","sourceVersion":"可选","method":"徒手|武器|推搡","ability":{"scope":"self|other|world|info","name":"...","text":"...","topics":["..."]},"behavior":"...","polarity":"help|harm|neutral"} | null}`,
+        `输出 JSON：{"action":{"kind":"move|speak|tell|attack|ability|take|drop|give|use|interact|assist|idle","targetEntity":"<实体id>","targetCell":{"layer":0,"x":0,"y":0},"moveTo":{"layer":0,"x":0,"y":0},"itemId":"<物品id>","fixtureId":"<设施id>","verb":"open|close|lock|unlock|break|write|read|toggle","text":"可选","topics":["..."],"mode":"告知|询问|请求|威胁","sourceVersion":"可选","method":"徒手|武器|推搡","ability":{"name":"你的能力名","scope":"可选","targetCell":{"layer":0,"x":0,"y":0},"fixtureId":"可选","itemId":"可选","text":"可选","topics":["..."]},"behavior":"...","polarity":"help|harm|neutral"} | null}`,
       ].join('\n')
       try {
         const text = await complete([{ role: 'system', content: SYSTEM }, { role: 'user', content: prompt }], 'act')

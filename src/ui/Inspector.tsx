@@ -133,6 +133,18 @@ export function Inspector({ world, layer, field, channel, selected, sim, records
               )
             })}
 
+            {simChar.statuses.length > 0 && (
+              <>
+                <div className="section-label">状态</div>
+                {simChar.statuses.map(status => (
+                  <div className="info-row" key={`${status.kind}-${status.until}`}>
+                    <span className="info-label">{status.kind}</span>
+                    <span className="dim">至 R{status.until}</span>
+                  </div>
+                ))}
+              </>
+            )}
+
             <div className="section-label">需求</div>
             <Row label="安全" value={String(Math.round(simChar.needs.safety))} />
             <Row label="地位" value={String(Math.round(simChar.needs.status))} />

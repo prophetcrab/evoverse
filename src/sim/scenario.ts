@@ -10,6 +10,19 @@ export const INFO = {
   missing: 'missing-student',
 } as const
 
+const MAIN = {
+  blackboard: 'main-blackboard',
+  frost: 'main-frost',
+  lock: 'main-lock',
+  medicine: 'main-medicine',
+  well: 'main-well',
+  broadcast: 'main-broadcast',
+  archive: 'main-archive',
+  cellar: 'main-cellar',
+  list: 'main-list',
+  missing: 'main-missing',
+} as const
+
 export type AbilityStateName = '稳定' | '亢进' | '暴走' | '封印'
 
 export interface AbilitySeed {
@@ -81,7 +94,7 @@ export const WORLD_INFO: WorldInfoSeed[] = [
 ]
 
 /** 私立雾影学园：十六名能力者。 */
-export const SEEDS: CharacterSeed[] = [
+const RAW_SEEDS: CharacterSeed[] = [
   {
     id: 'kirisame-ren',
     name: '神代 莲',
@@ -1021,5 +1034,121 @@ export const SEEDS: CharacterSeed[] = [
     attention: { 名单: 900, 结界: 700, 火野: 600, 地下室: 500 },
   },
 ]
+/** 每个角色的主线认知：共享 infoId，但内容不同，制造可行动的信息差。 */
+const MAIN_KNOWLEDGE: Record<string, SeedEntry[]> = {
+  'kirisame-ren': [
+    e(MAIN.lock, '旧实验室的锁昨天被换过，钥匙不在校方手里——换锁的人不想让我们进去。', ['旧实验室', '锁']),
+    e(MAIN.blackboard, '黑板上的字不能再让学生追；先压住，等我自己去看。', ['黑板', '封锁']),
+    e(MAIN.list, '学生会保险柜里有一份名单，和十年前的实验有关。', ['名单', '实验']),
+    e(MAIN.missing, '去年失踪的不止一个，妹妹也在其中。', ['失踪', '妹妹']),
+  ],
+  'kirisame-mio': [
+    e(MAIN.frost, '禁书区霜线从内侧结起，边界起点在旧账涂改那一栏，不在门边。', ['霜', '禁书区']),
+    e(MAIN.well, '井边的梦不是预兆，是有人想让我看见埋下去的东西。', ['井', '梦']),
+    e(MAIN.cellar, '会长守西侧不是怕我们进去，是怕自己一个人进去。', ['地下室', '会长']),
+    e(MAIN.lock, '旧实验室的锁被换过，黑木知道钥匙的事。', ['旧实验室', '钥匙']),
+  ],
+  'kirisame-hino': [
+    e(MAIN.medicine, '抑制药不是学校发的，是蓝原私自带进来的；藤堂知道来源。', ['抑制药', '蓝原']),
+    e(MAIN.list, '九条想拿名单，也想让我今晚闭嘴。', ['名单', '九条']),
+    e(MAIN.cellar, '地下室空气会让我的火失控，绝不进去。', ['地下室', '火']),
+    e(MAIN.broadcast, '广播线不是出口，是我烧起来时最先断的东西。', ['广播', '火']),
+  ],
+  'kirisame-yuki': [
+    e(MAIN.frost, '锁没被撬，霜从内侧往外结；边界还没看全，别碰最厚那道书脊。', ['霜', '锁']),
+    e(MAIN.blackboard, '黑板残痕像学生手笔，不是教师的字。', ['黑板', '笔迹']),
+    e(MAIN.list, '无名册子记的不是死因，是历届能力者的实验记录。', ['册子', '实验']),
+    e(MAIN.lock, '旧实验室的锁换过，钥匙不在校方；有人把门从里面锁上。', ['旧实验室', '锁']),
+  ],
+  'kirisame-hayato': [
+    e(MAIN.lock, '旧实验室的门是从里面锁的，我配过钥匙，里面有人。', ['旧实验室', '钥匙']),
+    e(MAIN.frost, '禁书区书脊的霜不是外面结的，锁扣没有撬痕。', ['霜', '锁']),
+    e(MAIN.broadcast, '钟声后出现的那扇门不是幻觉，广播线是单独接的。', ['钟声', '广播']),
+    e(MAIN.missing, '学生出事，第一个被问的是风纪委员；三个失踪的名字里有我认识的人。', ['失踪', '风纪']),
+  ],
+  'kirisame-moe': [
+    e(MAIN.well, '井下的树根缠着铁盒，土下面有管道通向地下室。', ['井', '铁盒', '管道']),
+    e(MAIN.frost, '温室的花朝地下室弯，霜线在花根下面变薄。', ['温室', '霜']),
+    e(MAIN.cellar, '地下室下面有东西在呼吸，不是风。', ['地下室', '植物']),
+    e(MAIN.medicine, '抑制药的味道盖不住温室的花香，蓝原身上有。', ['抑制药', '蓝原']),
+  ],
+  'kirisame-transfer': [
+    e(MAIN.lock, '旧实验室的锁是能碰锁的大人换的，不是我。', ['旧实验室', '锁']),
+    e(MAIN.cellar, '午夜前不能解封印；有人先破坏它，我才会动。', ['封印', '午夜']),
+    e(MAIN.list, '名单是十年前的实验记录，编号和校徽背面一致。', ['名单', '校徽']),
+    e(MAIN.missing, '我不是第一次在这栋楼里认路，十年前也是这样。', ['十年前', '转校生']),
+  ],
+  'kirisame-kanade': [
+    e(MAIN.medicine, '抑制药是我私自带进来的，最后一瓶不能交给任何大人；藤堂知道来源。', ['抑制药', '藤堂']),
+    e(MAIN.cellar, '哥哥死在十年前那场实验里，地下室里有他的记录。', ['地下室', '哥哥']),
+    e(MAIN.frost, '霜线不是天气，是封印泄漏；碰它会让人发烧。', ['霜', '封印']),
+    e(MAIN.missing, '三个失踪学生里有一个来过医务室，体温不正常。', ['失踪', '医务室']),
+  ],
+  'kirisame-hikaru': [
+    e(MAIN.broadcast, '广播杂音里的数数是在给钟声倒计时；第二声前必须把倒放录音放出去。', ['广播', '钟声']),
+    e(MAIN.frost, '霜线在广播线附近变薄，地下室的门不是用钥匙开的。', ['霜', '广播']),
+    e(MAIN.lock, '后门钥匙被人动过，广播线单独接在学园长那边。', ['后门', '钥匙']),
+    e(MAIN.list, '名单上的编号会在广播里被念出来，倒过来是一句话。', ['名单', '广播']),
+  ],
+  'kirisame-genzo': [
+    e(MAIN.archive, '旧仓库账本里“仓库”和“地下室”是同一栏涂改错位，所谓地下室只是旧账霉迹。', ['账本', '地下室']),
+    e(MAIN.lock, '旧实验室的锁没有换，钥匙一直在我这里；谁说换锁，谁在造谣。', ['旧实验室', '钥匙']),
+    e(MAIN.frost, '霜线是旧账页渗出的霉，不是门；再往里是死胡同。', ['霜', '账本']),
+    e(MAIN.cellar, '地下室不能开，哪怕会长跪下来求我；里面是十年前的实验场。', ['地下室', '封印']),
+  ],
+  'kirisame-saya': [
+    e(MAIN.blackboard, '黑板擦痕是学生手笔，不是教师字迹；粉笔槽里还有最后一笔。', ['黑板', '笔迹']),
+    e(MAIN.frost, '霜线是结界节点在漏，不是地下室门；别让学生顺着霜走。', ['霜', '结界']),
+    e(MAIN.missing, '三个学生不是逃课，是被带走了；结界撑不到天亮。', ['失踪', '结界']),
+    e(MAIN.lock, '旧实验室的锁昨天被换过，钥匙不在校方，换锁的人知道我们要查什么。', ['旧实验室', '锁']),
+  ],
+  'kirisame-rei': [
+    e(MAIN.archive, '三页抄本里被划掉的名字不是死了，是被转移；编号和旧校徽一致。', ['抄本', '名单']),
+    e(MAIN.list, '名单按能力等级排，不按成绩；被划掉的人被转移到地下室。', ['名单', '地下室']),
+    e(MAIN.medicine, '药柜标签被翻动过，缺的不只是普通抑制药，还有封印相关药。', ['药柜', '抑制药']),
+    e(MAIN.cellar, '地下室最后一栏是名单的终点，会长销毁记录是在保护名单上的人。', ['地下室', '记录']),
+  ],
+  'kirisame-ryunosuke': [
+    e(MAIN.archive, '档案箱里的名单和旧校徽编号对得上；箱底涂改处还有一层名字。', ['档案', '校徽']),
+    e(MAIN.list, '我哥的退学记录是假的，他没离开过学校；名单上有他的编号。', ['名单', '哥哥']),
+    e(MAIN.cellar, '墙里有声音，学校把东西砌进了地下室；不是传闻。', ['地下室', '墙']),
+    e(MAIN.lock, '旧实验室的锁被换过，撬痕是新的；有人不想让我们从档案里查。', ['旧实验室', '锁']),
+  ],
+  'kirisame-chinatsu': [
+    e(MAIN.broadcast, '后门钥匙昨晚被人动过，熄灯铃提前是为了掩盖钟声。', ['后门', '钥匙', '钟声']),
+    e(MAIN.missing, '三个学生不在床上；点名对不上人，窗户记号是里面的人画的。', ['失踪', '宿舍']),
+    e(MAIN.frost, '霜线从内侧结到窗台，和宿舍后门的锁痕连在一起。', ['霜', '后门']),
+    e(MAIN.lock, '后门钥匙被动过，能在夜里开门的只有宿舍长和学园长。', ['后门', '钥匙']),
+  ],
+  'kirisame-todo': [
+    e(MAIN.medicine, '药柜里缺的是普通抑制药，不是封印药；别让学生把记录写出去。', ['药柜', '抑制药']),
+    e(MAIN.cellar, '地下室那个女孩是唯一成功的样本；封印不能开。', ['地下室', '封印']),
+    e(MAIN.frost, '霜线是封印泄漏，碰了会让人想起十年前的事。', ['霜', '封印']),
+    e(MAIN.list, '十年前实验的签字人是我；名单上的人不是死了，是被转移。', ['名单', '实验']),
+  ],
+  'kirisame-shiori': [
+    e(MAIN.cellar, '地下室外面是十年前的走廊；门是反的，脚印比转校生重。', ['地下室', '十年前']),
+    e(MAIN.broadcast, '钟声是给我的信号，不是报时；第二声前必须离开地下室。', ['钟声', '地下室']),
+    e(MAIN.frost, '霜线从地下室门缝往外长，门后面有人在等。', ['霜', '地下室']),
+    e(MAIN.lock, '旧实验室的门从里面锁过；钥匙转动的声音我听过。', ['旧实验室', '钥匙']),
+  ],
+  'kirisame-inukai': [
+    e(MAIN.well, '井边的铁盒是我埋的；土下面的管道通向地下室。', ['井', '铁盒', '管道']),
+    e(MAIN.frost, '温室的花朝下弯，霜线在井边变薄；下面有东西在呼吸。', ['霜', '井']),
+    e(MAIN.medicine, '抑制药的味道我闻得出来，蓝原身上有，藤堂身上也有。', ['抑制药', '气味']),
+    e(MAIN.lock, '后门钥匙被动过，土里的脚印是从厨房后门进去的。', ['后门', '钥匙']),
+  ],
+  'kirisame-rin': [
+    e(MAIN.list, '学生会保险柜里的名单必须带出去；名单按能力等级排，学生只是数据。', ['名单', '九条']),
+    e(MAIN.cellar, '地下室是九条家养了十年的东西，不能让会长先下去。', ['地下室', '九条']),
+    e(MAIN.medicine, '抑制药是控制火野的钥匙，蓝原手里的最后一瓶不能丢。', ['抑制药', '火野']),
+    e(MAIN.lock, '旧实验室的锁换过，钥匙不在校方；能碰锁的大人只有一个。', ['旧实验室', '锁']),
+  ],
+}
+
+export const SEEDS: CharacterSeed[] = RAW_SEEDS.map(seed => ({
+  ...seed,
+  facts: [...seed.facts, ...(MAIN_KNOWLEDGE[seed.id] ?? [])],
+}))
 
 export const seedById = (id: string): CharacterSeed | undefined => SEEDS.find(seed => seed.id === id)

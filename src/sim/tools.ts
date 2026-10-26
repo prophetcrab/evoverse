@@ -91,13 +91,16 @@ export const ACTION_TOOLS: ToolDef[] = [
   },
   {
     name: 'ability',
-    description: '能力：修改自己、他人或世界的信息。self 治疗自己 1 点；other 治疗他人 1 点；world 在当前格留下持久痕迹；info 在当前格散布一条消息。暴走时使用会反噬 1 点生命。',
+    description: '使用你角色的能力。name 必须用【你的能力】里的名称；目标是角色/格子/设施/物品时按能力卡填 targetEntity/targetCell/fixtureId/itemId。该用的时候就用，不要因为负荷而完全不用；负荷到 80 才暴走。',
     params: [
-      { name: 'scope', type: "'self'|'other'|'world'|'info'", required: true, description: '作用域' },
-      { name: 'name', type: 'string', required: true, description: '能力名，如 治疗 / 镇定 / 留痕 / 传话' },
-      { name: 'targetEntity', type: 'string', description: 'scope=other 时的目标' },
-      { name: 'text', type: 'string', description: '痕迹或消息内容' },
+      { name: 'name', type: 'string', required: true, description: '能力名，必须用【你的能力】里的名称' },
+      { name: 'targetEntity', type: 'string', description: '目标角色 id（角色目标时）' },
+      { name: 'targetCell', type: '{layer,x,y}', description: '目标格（传送/地形时）' },
+      { name: 'fixtureId', type: 'string', description: '目标设施 id（如需要）' },
+      { name: 'itemId', type: 'string', description: '目标物品 id（如需要）' },
+      { name: 'text', type: 'string', description: '要说的话/广播内容/痕迹描述' },
       { name: 'topics', type: 'string[]', description: '话题标签' },
+      { name: 'scope', type: "'self'|'other'|'world'|'info'", description: '仅兼容旧能力，可不填' },
     ],
   },
 ]
