@@ -1,0 +1,7 @@
+- insert:
+    - id: evoverse
+      name: evoverse
+      config:
+        provider: deepseek-account
+        model: deepseek-flash
+        reasoningEffort: low

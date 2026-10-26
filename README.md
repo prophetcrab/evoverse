@@ -16,17 +16,67 @@
 - **组合方式**:cordis 配置装载——开发期用 `--patch` overlay 挂入本地 profile,发布后是普通 npm 包(`name` 即 cordis.yml 条目)。
 - **技术栈**:TypeScript ESM(`"type": "module"`),Node ≥ 24.9,pnpm;`@deepseek-ai/cordis` 走 peerDependencies。
 
+## 非目标
+
+- 通用游戏引擎（渲染、物理、实时性）
+- 通用编辑器（地图绘制、资源管理）——观察界面是目标，编辑不是
+- 分布式与多世界实例
+- agent 数量规模——要的是涌现质量与可解释性
+
 ## 路线图(验收驱动,验不过不进入下一阶段)
 
 | 阶段 | 内容 | 验收 | 状态 |
 |---|---|---|---|
 | **P0** | 插件骨架:`apply` / `inject` / effect 生命周期,dsh 加载可见 | dsh 启动日志出现 evoverse,卸载无残留 | ⬜ |
-| **P1** | 世界状态服务:最小世界模型 + 会话内读写工具 | 模型可调用工具读写世界并得到一致快照 | ⬜ |
-| **P2** | 演化循环:tick 事件 + 规则管线(waterfall)+ 演化观测工具 | 一个 tick 改变世界并可被解释回放 | ⬜ |
-| **P3** | 多 agent:agents 接缝 + 群体交互 + 涌现事件记录 | ≥2 agent 交互产生可追溯的涌现记录 | ⬜ |
+| **P1** | 世界状态服务:最小世界模型 + 会话内读写工具 + 单层 2D 观察面板 | 模型可调用工具读写世界并得到一致快照 | ⬜ |
+| **P2** | 回合推进 + 触发式规则 + 回放拖动条 | 一轮结算改变世界并可被解释回放 | ⬜ |
+| **P3** | 多 agent:agents 接缝 + 群体交互 + 涌现记录 + 等距 3D 视图 | ≥2 agent 交互产生可追溯的涌现记录 | ⬜ |
 | **P4** | 自演进:规则/策略的自我修改(带沙箱审批) | 世界规则被 agent 修改且通过审批留痕 | ⬜ |
 
-## 开发环境
+## 文档
+
+决策过程先行,其余按落地后的事实补写。规则见 [docs/README.md](docs/README.md)。
+
+- [docs/open-questions.md](docs/open-questions.md) —— 待议议程
+- [docs/adr/](docs/adr/README.md) —— 架构决策记录
+
+## 当前状态
+
+世界模型与观察界面已在本地和 dsh 宿主中跑通。插件已安装进 `evo` profile 并验证激活。
+
+- 已实现：多层格子、地形与楼梯三态、四种尺寸、两个场景（程序生成 / 庄园地图上的「私立雾影学园」剧本，120×80×4、18 名能力者、12 条地图世界信息）、三通道场（视觉走视线判定，声音/气味走预算扩散）、2D/3D 双视图、检查器、dsh 侧边栏入口与主面板
+- 角色仿真：初始记忆与传闻、需求/态度/目标/能力状态、feeling→thinking→acting 三阶段、回合结算与状态更新；dsh 中默认走真实模型（每轮预算 3 人，感受/思考/行动三段都调用，行动失败回落意图），独立开发页回落确定性思考层
+- 观察与分析：检查器 / 总览 / 回合 / 观测 / 用量五个页签，逐格本轮信息、每轮异步摘要、回合日志 JSON 导出、模型 token 用量仪表盘、数学观测（相平面 + 十个度量 + 自动结论）
+- 未实现：编年史与回放、与 dsh 会话绑定、物品系统
+
+## 开发
+
+```bash
+pnpm install
+pnpm dev        # 独立页面 http://localhost:5188
+pnpm typecheck
+pnpm build      # 产出 dsh 可加载的 lib/index.js + lib/client.js
+```
+
+### 装进 dsh
+
+```bash
+# 1. 打包插件（three.js 会打进客户端包）
+pnpm build
+
+# 2. 在 dsh 仓库里创建/使用一个 profile
+cd ~/project/deepseek-harness
+#    若 profile 还没有 web 应用，先从模板复制：
+#    cp -R ~/.dsh/profiles/web ~/.dsh/profiles/evo
+pnpm dsh plugin --profile evo add /Users/crab/project/evoverse
+
+# 3. 启动
+pnpm dsh --profile evo
+```
+
+启动后侧边栏出现 **evoverse**，点击后会话区被地图面板替代；再点会话即切回。
+
+开发环境要求：
 
 | 项 | 要求 |
 |---|---|
