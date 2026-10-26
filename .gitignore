@@ -1,0 +1,18 @@
+# Node / pnpm
+node_modules/
+dist/
+lib/
+*.tsbuildinfo
+coverage/
+
+# 环境与密钥
+.env
+.env.*
+
+# Python(实验脚本)
+__pycache__/
+.venv/
+
+# 编辑器与系统
+.DS_Store
+*.log
