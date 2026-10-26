@@ -168,6 +168,10 @@ export function createWorld(presetId: PresetId, seed = 7): World {
     label: '刺鼻气味',
   })
 
+  for (const cell of cells) {
+    if (cell.terrain === 'door') cell.terrain = 'floor'
+  }
+
   world.characters = characters
   world.info = info
   return world

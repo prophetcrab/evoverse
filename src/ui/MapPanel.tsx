@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Channel, PresetId, World } from '../world/types'
-import { PRESETS, createWorld } from '../world/generate'
-import { createManorWorld } from '../world/manor'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import type { Channel, PresetId } from '../world/types'
+import { PRESETS } from '../world/generate'
 import { computeField } from '../world/field'
 import { CHANNEL_LABEL } from '../world/terrain'
 import { Map2D } from './Map2D'
@@ -13,13 +12,7 @@ import { LogPanel } from './LogPanel'
 import { UsagePanel } from './UsagePanel'
 import { MetricsPanel } from './MetricsPanel'
 import type { Selection } from './types'
-import { createEngine, type SimEngine } from '../sim/engine'
-import type { SimView } from '../sim/types'
-import { computeMetrics, type MetricPoint } from '../sim/metrics'
-import { UsageMeter, type UsageSnapshot } from '../sim/usage'
-import { createHostComplete } from '../sim/llm-transport'
-import { createLlmMind } from '../sim/llm-mind'
-import { createLlmSummarizer } from '../sim/summarize'
+import { getRuntime } from './runtime'
 import './styles.css'
 
 const CHANNELS: Channel[] = ['vision', 'sound', 'smell']
@@ -27,128 +20,51 @@ const CHANNELS: Channel[] = ['vision', 'sound', 'smell']
 type SideTab = 'inspector' | 'overview' | 'log' | 'metrics' | 'usage'
 
 export function MapPanel() {
-  const [world, setWorld] = useState<World>(() => createWorld('30x30'))
+  const runtime = getRuntime()
+  const snapshot = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot)
+  const { world, sim, auto, running, usage, metrics, log } = snapshot
   const [mode, setMode] = useState<'2d' | '3d'>('2d')
-  const [layer, setLayer] = useState(0)
+  const [layer, setLayer] = useState(snapshot.defaultLayer)
   const [channel, setChannel] = useState<Channel | null>(null)
   const [selection, setSelection] = useState<Selection | null>(null)
   const [resetSignal, setResetSignal] = useState(0)
-  const [sim, setSim] = useState<SimView | null>(null)
-  const [auto, setAuto] = useState(false)
   const [sideTab, setSideTab] = useState<SideTab>('inspector')
-  const [usage, setUsage] = useState<UsageSnapshot | null>(null)
-  const [metrics, setMetrics] = useState<MetricPoint[]>([])
-  const engineRef = useRef<SimEngine | null>(null)
-  const runningRef = useRef(false)
-  const unsubscribeRef = useRef<(() => void) | null>(null)
-  const meterUnsubRef = useRef<(() => void) | null>(null)
+  const versionRef = useRef(snapshot.version)
 
   const field = useMemo(
     () => (channel ? computeField(world, channel, layer) : null),
     [world, channel, layer],
   )
 
-  const activate = useCallback((engine: SimEngine) => {
-    unsubscribeRef.current?.()
-    engineRef.current = engine
-    setSim(engine.view())
-    unsubscribeRef.current = engine.subscribe(() => setSim(engine.view()))
-  }, [])
-
-  /** 装了桥就走 LLM（每轮预算 3 人），否则确定性 mock。 */
-  const buildEngine = useCallback((next: World) => {
-    const meter = new UsageMeter()
-    meterUnsubRef.current?.()
-    meterUnsubRef.current = meter.subscribe(() => setUsage(meter.snapshot()))
-    setUsage(meter.snapshot())
-    const bridge = createHostComplete(meter, () => engineRef.current?.round ?? 0)
-    return createEngine(
-      next,
-      bridge ? createLlmMind(bridge) : undefined,
-      bridge ? createLlmSummarizer(bridge) : undefined,
-      bridge ? { budgetPerRound: 3 } : undefined,
-    )
-  }, [])
-
   useEffect(() => {
-    if (!engineRef.current) {
-      const engine = buildEngine(world)
-      activate(engine)
-      setMetrics([computeMetrics(engine.view(), engine.world())])
-    }
-    return () => {
-      unsubscribeRef.current?.()
-      unsubscribeRef.current = null
-      meterUnsubRef.current?.()
-      meterUnsubRef.current = null
-    }
-    // 只在挂载时创建一次；世界切换由 install 处理
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (snapshot.version === versionRef.current) return
+    versionRef.current = snapshot.version
+    setLayer(snapshot.defaultLayer)
+    setSelection(null)
+    setResetSignal(value => value + 1)
+  }, [snapshot.version, snapshot.defaultLayer])
 
   useEffect(() => {
     if (import.meta.env.DEV) {
-      ;(window as unknown as { __evoverse?: unknown }).__evoverse = { world, field, channel, layer, mode, sim }
+      ;(window as unknown as { __evoverse?: unknown }).__evoverse = {
+        runtime, world, field, channel, layer, mode, sim,
+      }
     }
-  }, [world, field, channel, layer, mode, sim])
+  }, [runtime, world, field, channel, layer, mode, sim])
 
-  const install = useCallback((next: World, nextLayer: number) => {
-    const engine = buildEngine(next)
-    activate(engine)
-    setWorld(engine.world())
-    setMetrics([computeMetrics(engine.view(), engine.world())])
-    setLayer(nextLayer)
-    setSelection(null)
-    setAuto(false)
-    setResetSignal(value => value + 1)
-  }, [activate, buildEngine])
-
-  const applyPreset = (id: PresetId) => install(createWorld(id), 0)
-  const applyManor = () => install(createManorWorld(), 1)
-
-  const runOne = useCallback(async () => {
-    const engine = engineRef.current
-    if (!engine || runningRef.current) return
-    runningRef.current = true
-    try {
-      await engine.step()
-      const nextWorld = engine.world()
-      const view = engine.view()
-      setWorld(nextWorld)
-      setSim(view)
-      setMetrics(previous => [...previous, computeMetrics(view, nextWorld)])
-    } finally {
-      runningRef.current = false
-    }
-  }, [])
+  const runOne = useCallback(() => {
+    void runtime.runOne()
+  }, [runtime])
 
   const exportLog = useCallback(() => {
-    const engine = engineRef.current
-    if (!engine) return
-    const blob = new Blob([engine.exportLog()], { type: 'application/json' })
+    const blob = new Blob([runtime.exportLog()], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `evoverse-log-r${engine.round}.json`
+    link.download = `evoverse-log-r${sim.round}.json`
     link.click()
     URL.revokeObjectURL(url)
-  }, [])
-
-  useEffect(() => {
-    if (!auto) return
-    let cancelled = false
-    let timer: number | undefined
-    const tick = async () => {
-      if (cancelled) return
-      await runOne()
-      if (!cancelled) timer = window.setTimeout(tick, 850)
-    }
-    timer = window.setTimeout(tick, 200)
-    return () => {
-      cancelled = true
-      if (timer !== undefined) window.clearTimeout(timer)
-    }
-  }, [auto, runOne])
+  }, [runtime, sim.round])
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -162,7 +78,7 @@ export function MapPanel() {
       else if (event.key === '3') setChannel('smell')
       else if (event.key.toLowerCase() === 'm') setMode(value => (value === '2d' ? '3d' : '2d'))
       else if (event.key.toLowerCase() === 'r') setResetSignal(value => value + 1)
-      else if (event.key.toLowerCase() === 'n') void runOne()
+      else if (event.key.toLowerCase() === 'n') runOne()
       else if (event.key === 'Escape') setSelection(null)
       else return
       event.preventDefault()
@@ -172,6 +88,14 @@ export function MapPanel() {
   }, [world.layers, runOne])
 
   const demoPreset: PresetId = world.preset === 'manor' ? '30x30' : world.preset
+
+  const logLabel = log.state === 'unavailable'
+    ? '日志未连接'
+    : log.state === 'error'
+      ? '日志写入失败'
+      : log.state === 'saving'
+        ? '日志写入中'
+        : `日志 ${log.rounds} 轮`
 
   return (
     <div className="evoverse-panel">
@@ -187,14 +111,14 @@ export function MapPanel() {
           <button
             type="button"
             className={world.preset !== 'manor' ? 'chip on' : 'chip'}
-            onClick={() => applyPreset(demoPreset)}
+            onClick={() => runtime.applyPreset(demoPreset)}
           >
             程序生成
           </button>
           <button
             type="button"
             className={world.preset === 'manor' ? 'chip on' : 'chip'}
-            onClick={applyManor}
+            onClick={() => runtime.applyManor()}
           >
             学园
           </button>
@@ -208,7 +132,7 @@ export function MapPanel() {
                 key={preset.id}
                 type="button"
                 className={preset.id === world.preset ? 'chip on' : 'chip'}
-                onClick={() => applyPreset(preset.id)}
+                onClick={() => runtime.applyPreset(preset.id)}
               >
                 {preset.label}
               </button>
@@ -247,16 +171,30 @@ export function MapPanel() {
 
         <div className="group run-group">
           <span className="group-label">运行</span>
-          <button type="button" className="chip" onClick={() => void runOne()}>下一轮</button>
+          <button type="button" className="chip" onClick={runOne} disabled={running}>下一轮</button>
           <button
             type="button"
             className={auto ? 'chip on' : 'chip'}
-            onClick={() => setAuto(value => !value)}
+            onClick={() => runtime.setAuto(!auto)}
           >
             {auto ? '暂停' : '自动'}
           </button>
-          <span className="round-badge">第 {sim?.round ?? 0} 轮</span>
-          {usage && usage.calls > 0 && (
+          <button
+            type="button"
+            className="chip"
+            onClick={() => runtime.reset()}
+            title="清空推演进度，按当前场景重新开始，并新开一份日志"
+          >
+            重置
+          </button>
+          <span className="round-badge">第 {sim.round} 轮</span>
+          <span
+            className={`round-badge log-badge ${log.state}`}
+            title={log.file ?? log.error ?? '未连接宿主，日志只在内存里'}
+          >
+            {logLabel}
+          </span>
+          {usage.calls > 0 && (
             <span className="round-badge usage-badge">LLM {usage.calls} · {usage.total} tok</span>
           )}
         </div>
@@ -290,7 +228,7 @@ export function MapPanel() {
           <span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> 通道</span>
           <span><kbd>M</kbd> 2D/3D</span>
           <span><kbd>N</kbd> 下一轮</span>
-          <span><kbd>R</kbd> 重置</span>
+          <span><kbd>R</kbd> 视角</span>
         </div>
       </div>
 
@@ -340,7 +278,7 @@ export function MapPanel() {
             channel={channel}
             selected={selection}
             sim={sim}
-            records={sim?.records ?? null}
+            records={sim.records}
           />
         )}
         {sideTab === 'overview' && (
@@ -354,7 +292,7 @@ export function MapPanel() {
           />
         )}
         {sideTab === 'log' && (
-          <LogPanel sim={sim} world={world} onExport={exportLog} />
+          <LogPanel sim={sim} world={world} log={log} onExport={exportLog} />
         )}
         {sideTab === 'usage' && <UsagePanel usage={usage} />}
         {sideTab === 'metrics' && <MetricsPanel points={metrics} />}

@@ -53,6 +53,46 @@ export interface InfoEntry {
   ttl?: number
 }
 
+export type ItemKind = 'weapon' | 'medicine' | 'document' | 'key' | 'tool' | 'misc'
+
+/** 可携带物品：在地面上、被角色持有，或装在设施里。 */
+export interface WorldItem {
+  id: string
+  name: string
+  kind: ItemKind
+  description: string
+  portable?: boolean
+  at?: Coord
+  holder?: string
+  container?: string
+  /** 武器伤害与射程 */
+  damage?: number
+  range?: number
+  /** 持有时的减伤 */
+  defense?: number
+  /** 使用后恢复的生命 */
+  heal?: number
+  /** 可打开的设施 id */
+  unlocks?: string
+  /** 阅读后写入私人记忆的内容 */
+  document?: { content: string; topics: string[] }
+}
+
+export type FixtureKind = 'container' | 'door' | 'board' | 'device'
+export type FixtureState = 'closed' | 'open' | 'locked' | 'broken' | 'on' | 'off'
+
+/** 固定在格子上的设施：档案箱、药柜、黑板、井口、阀门、封印等。 */
+export interface WorldFixture {
+  id: string
+  name: string
+  at: Coord
+  kind: FixtureKind
+  state: FixtureState
+  /** 上锁时需要的物品 id */
+  keyId?: string
+  description: string
+}
+
 export interface World {
   name: string
   preset: WorldId
@@ -62,10 +102,15 @@ export interface World {
   layerNames?: string[]
   /** 区域表：id -> 名称与一句静态描述 */
   zones?: Record<string, { name: string; note: string }>
+  /** 安全边界；越界移动即死亡（仅对该层生效） */
+  safeBounds?: { layer: number; x0: number; y0: number; x1: number; y1: number }
   /** 索引：layer * height * width + y * width + x */
   cells: Cell[]
   characters: Character[]
   info: InfoEntry[]
+  /** 物品与设施；程序生成的空世界为空数组 */
+  items?: WorldItem[]
+  fixtures?: WorldFixture[]
   round: number
 }
 

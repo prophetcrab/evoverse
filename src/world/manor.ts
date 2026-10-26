@@ -1,4 +1,6 @@
-import type { Cell, Character, InfoEntry, StairState, World } from './types'
+import type {
+  Cell, Character, InfoEntry, StairState, World, WorldFixture, WorldItem,
+} from './types'
 import { SEEDS, WORLD_INFO } from '../sim/scenario'
 
 /**
@@ -191,12 +193,12 @@ export function createManorWorld(): World {
     { id: 'kitchen', name: '厨房', note: '灶上还温着汤，后门通向后院。', layer: L_GROUND, rect: { x0: 100, y0: 13, x1: 110, y1: 34 } },
     { id: 'dorm', name: '宿舍', note: '床铺整齐，有三张是空的。', layer: L_FIRST, rect: { x0: 64, y0: 13, x1: 84, y1: 34 } },
     { id: 'guest', name: '客房', note: '窗帘拉着，桌上的信没写完。', layer: L_FIRST, rect: { x0: 85, y0: 13, x1: 99, y1: 34 } },
-    { id: 'infirmary', name: '医务室', note: '药柜半开，消毒水味很重。', layer: L_FIRST, rect: { x0: 100, y0: 13, x1: 110, y1: 34 } },
+    { id: 'infirmary', name: '医务室', note: '药柜锁着，消毒水味很重。', layer: L_FIRST, rect: { x0: 100, y0: 13, x1: 110, y1: 34 } },
     { id: 'dorm-corridor', name: '宿舍走廊', note: '地板会响，熄灯铃的线在这里。', layer: L_FIRST, rect: { x0: 65, y0: 36, x1: 109, y1: 38 } },
     { id: 'lounge-west', name: '西休息室', note: '壁炉冷了，沙发上落着灰。', layer: L_FIRST, rect: { x0: 64, y0: 40, x1: 81, y1: 55 } },
     { id: 'landing', name: '楼梯厅', note: '主楼梯在这里收口，扶手有新的划痕。', layer: L_FIRST, rect: { x0: 82, y0: 40, x1: 92, y1: 55 } },
     { id: 'lounge-east', name: '东休息室', note: '窗对着花园，玻璃上有人画过记号。', layer: L_FIRST, rect: { x0: 93, y0: 40, x1: 110, y1: 55 } },
-    { id: 'attic', name: '阁楼', note: '旧课桌堆到屋顶，档案箱半开着。', layer: L_SECOND, rect: { x0: 68, y0: 16, x1: 106, y1: 52 } },
+    { id: 'attic', name: '阁楼', note: '旧课桌堆到屋顶，档案箱锁着，箱盖有旧撬痕。', layer: L_SECOND, rect: { x0: 68, y0: 16, x1: 106, y1: 52 } },
     { id: 'lab', name: '旧实验室', note: '培养槽排成一列，只有一个还有水。', layer: L_BASE, rect: { x0: 66, y0: 14, x1: 108, y1: 54 } },
     { id: 'storage', name: '旧储藏室', note: '酒架和木箱，空气里有霉味。', layer: L_BASE, rect: { x0: 8, y0: 52, x1: 30, y1: 72 } },
   ]
@@ -224,6 +226,11 @@ export function createManorWorld(): World {
     ['outside', { name: '校园外围', note: '围墙外的空地，雾很重。' }] as const,
   ])
 
+  // 删除所有门：门格改为可通行地面
+  for (const cell of cells) {
+    if (cell.terrain === 'door') cell.terrain = 'floor'
+  }
+
   const characters: Character[] = SEEDS.map(seed => ({
     id: seed.id,
     name: seed.name,
@@ -242,6 +249,157 @@ export function createManorWorld(): World {
     ttl: entry.ttl,
   }))
 
+  const fixtures: WorldFixture[] = [
+    {
+      id: 'fx-archive',
+      name: '阁楼档案箱',
+      at: { layer: L_SECOND, x: 90, y: 30 },
+      kind: 'container',
+      state: 'locked',
+      keyId: 'item-archive-key',
+      description: '箱盖被锁扣压住，边上留着被撬过的旧痕。',
+    },
+    {
+      id: 'fx-medicine',
+      name: '医务室药柜',
+      at: { layer: L_FIRST, x: 104, y: 24 },
+      kind: 'container',
+      state: 'locked',
+      keyId: 'item-med-key',
+      description: '玻璃药柜，锁孔很小，里面能看到几排药瓶。',
+    },
+    {
+      id: 'fx-blackboard',
+      name: '教室黑板',
+      at: { layer: L_GROUND, x: 96, y: 28 },
+      kind: 'board',
+      state: 'closed',
+      description: '黑板中央有一片被擦过的白痕，粉笔槽里还留着粉笔灰。',
+    },
+    {
+      id: 'fx-well',
+      name: '后院井口',
+      at: { layer: L_GROUND, x: 14, y: 56 },
+      kind: 'container',
+      state: 'closed',
+      description: '井口盖着一块旧木板，板缝里渗出湿泥的气味。',
+    },
+    {
+      id: 'fx-greenhouse',
+      name: '温室灌溉阀',
+      at: { layer: L_GROUND, x: 13, y: 12 },
+      kind: 'device',
+      state: 'off',
+      description: '温室角落的旧阀门，管线上结着白霜。',
+    },
+    {
+      id: 'fx-cellar',
+      name: '地下室封印门',
+      at: { layer: L_BASE, x: 100, y: 40 },
+      kind: 'door',
+      state: 'locked',
+      keyId: 'item-master-key',
+      description: '铁门上有新旧两层锁痕，门缝里透出冷气。',
+    },
+  ]
+
+  const items: WorldItem[] = [
+    {
+      id: 'item-med-key',
+      name: '医务室钥匙',
+      kind: 'key',
+      description: '一把小铜钥匙，柄上刻着医务室的十字。',
+      holder: 'kirisame-todo',
+      unlocks: 'fx-medicine',
+    },
+    {
+      id: 'item-archive-key',
+      name: '档案箱钥匙',
+      kind: 'key',
+      description: '细长的铁钥匙，齿口很新，像是后来配的。',
+      container: 'fx-medicine',
+      unlocks: 'fx-archive',
+    },
+    {
+      id: 'item-suppressant',
+      name: '抑制药',
+      kind: 'medicine',
+      description: '一小瓶透明药水，能暂时压住能力负荷。',
+      holder: 'kirisame-kanade',
+      heal: 1,
+    },
+    {
+      id: 'item-three-pages',
+      name: '三页抄本',
+      kind: 'document',
+      description: '从旧档案里抄下来的三页纸，边角被冰水浸过。',
+      holder: 'kirisame-rei',
+      document: {
+        content: '十年前实验的抄本残页：被划掉的名字不是死亡，而是被转移。名单编号与旧校徽背面的刻号对应，地下室是最后一栏。',
+        topics: ['名单', '实验', '地下室'],
+      },
+    },
+    {
+      id: 'item-old-badge',
+      name: '旧校徽',
+      kind: 'misc',
+      description: '一枚磨旧的校徽，背面刻着一串编号。',
+      container: 'fx-archive',
+    },
+    {
+      id: 'item-signal-gun',
+      name: '旧信号枪',
+      kind: 'weapon',
+      description: '一把旧信号枪，声音很大，能打到很远的地方。',
+      container: 'fx-archive',
+      damage: 2,
+      range: 5,
+    },
+    {
+      id: 'item-master-key',
+      name: '总钥匙',
+      kind: 'key',
+      description: '一把发黑的铁钥匙，能开地下室封印门。',
+      holder: 'kirisame-genzo',
+      unlocks: 'fx-cellar',
+    },
+    {
+      id: 'item-crowbar',
+      name: '撬棍',
+      kind: 'tool',
+      description: '一根沉重的撬棍，能撬开锁死的箱子和井盖。',
+      at: { layer: L_SECOND, x: 90, y: 30 },
+    },
+    {
+      id: 'item-fire-axe',
+      name: '消防斧',
+      kind: 'weapon',
+      description: '旧消防斧，近身很重。',
+      at: { layer: L_BASE, x: 99, y: 40 },
+      damage: 2,
+      range: 1,
+    },
+    {
+      id: 'item-ledger',
+      name: '井底名册',
+      kind: 'document',
+      description: '装在铁盒里的旧名册，纸页被潮气泡皱。',
+      container: 'fx-well',
+      document: {
+        content: '井底铁盒里的旧名册：历届能力者的编号、日期，最后一页写着三个新名字，旁边画着一个向下的箭头。',
+        topics: ['名册', '井', '失踪'],
+      },
+    },
+    {
+      id: 'item-riot-shield',
+      name: '防暴盾',
+      kind: 'misc',
+      description: '一面旧防暴盾，能挡下一点伤害。',
+      at: { layer: L_GROUND, x: 58, y: 74 },
+      defense: 1,
+    },
+  ]
+
   const world: World = {
     name: '私立雾影学园',
     preset: 'manor',
@@ -250,9 +408,12 @@ export function createManorWorld(): World {
     layers: 4,
     layerNames: ['旧实验室', '校舍', '宿舍', '阁楼'],
     zones,
+    safeBounds: { layer: L_GROUND, x0: 2, y0: 2, x1: 117, y1: 77 },
     cells,
     characters,
     info,
+    items,
+    fixtures,
     round: 0,
   }
   return world

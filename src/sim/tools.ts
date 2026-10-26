@@ -2,7 +2,7 @@ import type { ActionKind } from './types'
 
 /** 角色一轮只能调用其中一个工具；这里同时供 mock、LLM 提示词与未来的 dsh 工具注册使用。 */
 export interface ToolDef {
-  name: Exclude<ActionKind, 'idle' | 'use'>
+  name: Exclude<ActionKind, 'idle'>
   description: string
   params: Array<{ name: string; type: string; required?: boolean; description: string }>
 }
@@ -10,7 +10,7 @@ export interface ToolDef {
 export const ACTION_TOOLS: ToolDef[] = [
   {
     name: 'move',
-    description: '移动到相邻的可通行格；上下楼必须站在对应的楼梯格上。',
+    description: '只移动用 move（targetCell）；如果想移动后行动，在意图里加 moveTo，再给行为。每轮最多走 6 格，自动寻路绕开墙和其他角色。',
     params: [
       { name: 'targetCell', type: '{layer,x,y}', required: true, description: '目标格' },
     ],
@@ -35,15 +35,63 @@ export const ACTION_TOOLS: ToolDef[] = [
   },
   {
     name: 'attack',
-    description: '攻击看得见的角色；徒手/推搡造成 1 点伤害，武器造成 2 点。生命归零会失能。',
+    description: '攻击看得见的角色；徒手/推搡 1 点伤害，武器按物品伤害与射程结算，护具可减伤。',
     params: [
       { name: 'targetEntity', type: 'string', required: true, description: '目标角色 id' },
-      { name: 'method', type: "'徒手'|'武器'|'推搡'", description: '攻击手段' },
+      { name: 'method', type: "'徒手'|'武器'|'推搡'", description: '攻击手段；选武器时必须持有武器' },
+      { name: 'itemId', type: 'string', description: '指定使用的武器 id；缺省自动用身上的武器' },
+    ],
+  },
+  {
+    name: 'take',
+    description: '拿走当前格地面或已打开容器里的物品。',
+    params: [
+      { name: 'itemId', type: 'string', required: true, description: '物品 id' },
+    ],
+  },
+  {
+    name: 'drop',
+    description: '把身上的物品放到当前格。',
+    params: [
+      { name: 'itemId', type: 'string', required: true, description: '物品 id' },
+    ],
+  },
+  {
+    name: 'give',
+    description: '把身上的物品交给看得见的角色。',
+    params: [
+      { name: 'itemId', type: 'string', required: true, description: '物品 id' },
+      { name: 'targetEntity', type: 'string', required: true, description: '目标角色 id' },
+    ],
+  },
+  {
+    name: 'use',
+    description: '使用身上的物品：药品治疗、文件阅读、钥匙开锁；物品不会因使用而消失（药品除外）。',
+    params: [
+      { name: 'itemId', type: 'string', required: true, description: '物品 id' },
+      { name: 'targetEntity', type: 'string', description: '药品的目标角色；缺省为自己' },
+    ],
+  },
+  {
+    name: 'interact',
+    description: '操作当前格的设施：开/关/锁/解锁/撬开容器、读/写黑板、开关装置。',
+    params: [
+      { name: 'fixtureId', type: 'string', required: true, description: '设施 id' },
+      { name: 'verb', type: "'open'|'close'|'lock'|'unlock'|'break'|'write'|'read'|'toggle'", required: true, description: '操作方式' },
+      { name: 'text', type: 'string', description: 'write 时写下的内容' },
+      { name: 'topics', type: 'string[]', description: '话题标签' },
+    ],
+  },
+  {
+    name: 'assist',
+    description: '协助看得见的同伙：本轮他若攻击，伤害 +1。',
+    params: [
+      { name: 'targetEntity', type: 'string', required: true, description: '目标角色 id' },
     ],
   },
   {
     name: 'ability',
-    description: '能力：修改自己、他人或世界的信息。self 治疗自己 1 点；other 治疗他人 1 点；world 在当前格留下持久痕迹；info 在当前格散布一条消息。',
+    description: '能力：修改自己、他人或世界的信息。self 治疗自己 1 点；other 治疗他人 1 点；world 在当前格留下持久痕迹；info 在当前格散布一条消息。暴走时使用会反噬 1 点生命。',
     params: [
       { name: 'scope', type: "'self'|'other'|'world'|'info'", required: true, description: '作用域' },
       { name: 'name', type: 'string', required: true, description: '能力名，如 治疗 / 镇定 / 留痕 / 传话' },

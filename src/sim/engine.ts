@@ -1,10 +1,16 @@
-import type { Channel, Character, Coord, InfoEntry, World } from '../world/types'
+import type {
+  Channel, Character, Coord, InfoEntry, World, WorldFixture, WorldItem,
+} from '../world/types'
 import { cellAt, inBounds } from '../world/types'
 import { permeabilityOf } from '../world/terrain'
 import { hasLineOfSight } from '../world/field'
 import { SEEDS, seedById } from './scenario'
 import { createMockMind } from './mock-mind'
 import type {
+  MoveOption,
+  Goal,
+  FixtureView,
+  ItemView,
   ActOutput,
   ActionRecord,
   Candidate,
@@ -50,6 +56,24 @@ export interface SimEngine {
 
 const samePos = (a: Coord, b: Coord): boolean => a.layer === b.layer && a.x === b.x && a.y === b.y
 
+const compact = (value: string): string => value.replace(/[\s，。、；：！？,.;:!?"'“”‘’（）()]/g, '')
+
+/** LLM 常用角色称呼；解析不到实体时丢弃，避免写进脏键。 */
+const ROLE_ALIASES: Record<string, EntityId> = {
+  会长: 'kirisame-ren',
+  学生会长: 'kirisame-ren',
+  转校生: 'kirisame-transfer',
+  宿舍长: 'kirisame-chinatsu',
+  保健委员: 'kirisame-kanade',
+  风纪委员: 'kirisame-hayato',
+  老师: 'kirisame-saya',
+  班主任: 'kirisame-saya',
+  校医: 'kirisame-todo',
+  园丁: 'kirisame-inukai',
+  书记: 'kirisame-rei',
+  理事长之女: 'kirisame-rin',
+}
+
 const clamp = (value: number, min: number, max: number): number => Math.max(min, Math.min(max, value))
 
 const dist = (a: Coord, b: Coord): number => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.layer - b.layer) * 3
@@ -64,16 +88,23 @@ class Engine implements SimEngine {
   private seq = 0
   private lastActionCount = 0
   private readonly mind: Mind
-  private readonly mockMind: Mind
   private readonly summarizer: RoundSummarizer
-  private readonly options: EngineOptions
+  private items: WorldItem[] = []
+  private fixtures: WorldFixture[] = []
+  private readonly assists = new Map<EntityId, number>()
   private snapshotWorld: World
 
-  constructor(world: World, mind?: Mind, summarizer?: RoundSummarizer, options: EngineOptions = {}) {
+  constructor(world: World, mind?: Mind, summarizer?: RoundSummarizer) {
     this.summarizer = summarizer ?? templateSummary
-    this.options = options
     this.snapshotWorld = { ...world, characters: [...world.characters] }
+    this.items = (world.items ?? []).map(item => ({ ...item, at: item.at ? { ...item.at } : undefined }))
+    this.fixtures = (world.fixtures ?? []).map(fixture => ({ ...fixture, at: { ...fixture.at } }))
     for (const character of world.characters) this.chars[character.id] = this.createCharacter(character)
+    for (const item of this.items) {
+      if (item.holder && this.chars[item.holder] && !this.chars[item.holder].inventory.includes(item.id)) {
+        this.chars[item.holder].inventory.push(item.id)
+      }
+    }
     this.info = world.info.map(entry => ({
       id: entry.id,
       versionId: `i-init-${entry.id}`,
@@ -87,13 +118,13 @@ class Engine implements SimEngine {
       ttl: entry.ttl ?? 2,
       bornRound: 0,
     }))
-    this.mockMind = createMockMind({
+    const mockMind = createMockMind({
       world: () => this.snapshotWorld,
       canWalk: cell => this.canWalk(cell),
       neighbors: from => this.neighbors(from),
       stepToward: (from, to) => this.stepToward(from, to),
     })
-    this.mind = mind ?? this.mockMind
+    this.mind = mind ?? mockMind
   }
 
   private createCharacter(character: Character): SimCharacter {
@@ -141,6 +172,7 @@ class Engine implements SimEngine {
       attitudes: seed ? Object.fromEntries(Object.entries(seed.attitudes).map(([id, value]) => [id, { ...value }])) : {},
       relations: {},
       presentation: { description: `${character.name}站在那里。`, overrides: false, at: 0 },
+      inventory: [],
       memory,
       lastActedAt: -2,
       lastThought: null,
@@ -184,6 +216,8 @@ class Engine implements SimEngine {
         height: this.snapshotWorld.height,
         layers: this.snapshotWorld.layers,
         round: this.round,
+        items: this.items,
+        fixtures: this.fixtures,
       },
       records: this.records,
       events: this.events,
@@ -199,30 +233,51 @@ class Engine implements SimEngine {
     this.info = this.info.filter(entry => entry.bornRound + entry.ttl >= this.round)
     const infoStart = this.info.length
 
-    const eligible = Object.values(this.chars).filter(character => this.eligible(character))
-    const budget = this.options.budgetPerRound
-    const ordered = budget === undefined
-      ? eligible
-      : [...eligible].sort((a, b) => this.urgency(b) - this.urgency(a))
-    const assignments = ordered.map((character, index) => ({
-      character,
-      mind: budget !== undefined && index >= budget ? this.mockMind : this.mind,
-    }))
+    const active = Object.values(this.chars).filter(character => character.status === 'active')
     const patches = new Map<EntityId, StatePatch>()
     const actions: SimAction[] = []
 
-    const results = await Promise.all(assignments.map(async ({ character, mind }) => {
+    const results = await Promise.all(active.map(async character => {
+      const mind = this.mind
       const candidates = this.candidatesFor(character)
       const location = this.locationOf(character.pos)
-      const feel = await mind.feel({ self: character, candidates, location, round: this.round })
+      const visible = this.visibleFrom(character)
+      const feel = await mind.feel({ self: character, candidates, visible, location, round: this.round })
       for (const versionId of feel.remember) {
         const entry = this.info.find(item => item.versionId === versionId)
         if (entry) this.remember(character, entry)
       }
+      for (const targetId of feel.rememberPeople ?? []) {
+        const target = this.chars[targetId]
+        if (!target || target.status !== 'active' || !visible.some(entity => entity.id === targetId)) continue
+        const infoId = `seen-${targetId}-${this.round}`
+        if (character.memory.some(entry => entry.infoId === infoId)) continue
+        character.memory.push({
+          versionId: `i-seen-${this.seq++}`,
+          infoId,
+          content: `我看见${target.name}在附近：${target.presentation.description}`,
+          topics: ['在场', target.name],
+          provenance: 'perceived',
+          derivedFrom: [],
+          at: this.round,
+          source: targetId,
+        })
+      }
       if (feel.attention) this.applyAttention(character, feel.attention)
 
-      const visible = this.visibleFrom(character)
-      const think = await mind.think({ self: character, digest: character.lastDigest, visible, location, round: this.round })
+      const moves = this.moveOptions(character)
+      const items = this.itemViewsFor(character)
+      const fixtures = this.fixtureViewsFor(character)
+      const think = await mind.think({
+        self: character,
+        digest: character.lastDigest,
+        visible,
+        location,
+        moves,
+        items,
+        fixtures,
+        round: this.round,
+      })
       for (const thought of think.thoughts) {
         const content = thought.content.trim()
         if (!content) continue
@@ -239,15 +294,32 @@ class Engine implements SimEngine {
         })
       }
       character.lastThought = think.thoughts[0]?.content ?? null
-      if (think.patch) patches.set(character.id, think.patch)
+      if (think.patch) {
+        const resolved = this.resolvePatch(character, think.patch)
+        const hasEffect = Boolean(
+          resolved.attitudes?.length || resolved.goals?.length || resolved.attention?.length
+          || (resolved.needs && Object.keys(resolved.needs).length > 0)
+          || resolved.presentation,
+        )
+        if (hasEffect) patches.set(character.id, resolved)
+      }
 
       const act: ActOutput = think.intention
-        ? await mind.act({ self: character, intention: think.intention, round: this.round })
+        ? await mind.act({ self: character, intention: think.intention, moves, items, fixtures, round: this.round })
         : { action: null }
       return act.action
     }))
 
     for (const action of results) if (action) actions.push(action)
+    this.assists.clear()
+    for (const action of actions) {
+      if (action.kind !== 'assist') continue
+      const actor = this.chars[action.actor]
+      const target = this.resolveCharacterRef(action.targetEntity)
+      if (actor && target && target.id !== actor.id && target.status === 'active' && this.canPerceive(actor, target)) {
+        this.assists.set(target.id, (this.assists.get(target.id) ?? 0) + 1)
+      }
+    }
     const actionRecords = this.settle(actions)
     this.lastActionCount = actions.length
 
@@ -280,6 +352,8 @@ class Engine implements SimEngine {
         origin: entry.origin,
         label: entry.label,
       })),
+      items: this.items.map(item => ({ ...item, at: item.at ? { ...item.at } : undefined })),
+      fixtures: this.fixtures.map(fixture => ({ ...fixture, at: { ...fixture.at } })),
     }
 
     const record: RoundRecord = {
@@ -316,20 +390,6 @@ class Engine implements SimEngine {
     return { round: this.round, events: roundEvents }
   }
 
-  private urgency(character: SimCharacter): number {
-    return Math.max(character.needs.safety, character.needs.status, character.needs.curiosity)
-      + character.initiative / 10
-  }
-
-  private eligible(character: SimCharacter): boolean {
-    if (character.status !== 'active') return false
-    if (this.candidatesFor(character).length > 0) return true
-    if (Object.values(character.needs).some(value => value > 700)) return true
-    if (character.goals.some(goal => goal.status === 'blocked')) return true
-    const hasActiveGoal = character.goals.some(goal => goal.status === 'active')
-    return hasActiveGoal && this.round - character.lastActedAt >= 2
-  }
-
   private candidatesFor(character: SimCharacter): Candidate[] {
     const known = new Set(character.memory.map(entry => entry.versionId))
     const candidates: Candidate[] = []
@@ -346,6 +406,7 @@ class Engine implements SimEngine {
         topics: entry.topics,
         strength,
         source: entry.source,
+        sourceName: entry.source ? this.chars[entry.source]?.name : undefined,
       })
     }
     return candidates.sort((a, b) => b.strength - a.strength)
@@ -389,6 +450,52 @@ class Engine implements SimEngine {
     for (const update of updates) character.attention[update.topic] = clamp(Math.round(update.weight), 0, 1000)
   }
 
+  private dieOutside(actor: SimCharacter): void {
+    actor.vitals.hp = 0
+    actor.status = 'dead'
+    const corpse = this.randomSafeCell()
+    actor.pos = { ...corpse }
+    actor.presentation = { description: `${actor.name}的尸体，倒在地上。`, overrides: true, at: this.round }
+    const versionId = `i-death-${this.seq++}`
+    this.info.push({
+      id: versionId,
+      versionId,
+      channel: 'vision',
+      strength: 800,
+      origin: { ...corpse },
+      label: `${actor.name}的尸体`,
+      content: `${actor.name}的尸体，倒在地上。`,
+      gist: `${actor.name}的尸体`,
+      topics: ['尸体', '死亡'],
+      ttl: 99,
+      bornRound: this.round,
+    })
+    this.pushEvent('death', actor, undefined, `走出校门，倒在校外；尸体被移到 (${corpse.x}, ${corpse.y})`, corpse)
+  }
+
+  private randomSafeCell(): Coord {
+    const bounds = this.snapshotWorld.safeBounds
+    const layer = bounds?.layer ?? 0
+    const minX = bounds?.x0 ?? 0
+    const maxX = bounds?.x1 ?? this.snapshotWorld.width - 1
+    const minY = bounds?.y0 ?? 0
+    const maxY = bounds?.y1 ?? this.snapshotWorld.height - 1
+    let seed = (this.seq * 2654435761 + this.round * 97) >>> 0
+    const next = (): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+      return seed / 4294967296
+    }
+    for (let i = 0; i < 200; i += 1) {
+      const x = minX + Math.floor(next() * (maxX - minX + 1))
+      const y = minY + Math.floor(next() * (maxY - minY + 1))
+      const cell = { layer, x, y }
+      if (!this.canWalk(cell)) continue
+      if (Object.values(this.chars).some(other => other.status !== 'dead' && samePos(other.pos, cell))) continue
+      return cell
+    }
+    return { layer, x: minX, y: minY }
+  }
+
   private locationOf(cell: Coord): { name: string; note: string } {
     if (!inBounds(this.snapshotWorld, cell)) return { name: '未知', note: '' }
     const here = cellAt(this.snapshotWorld, cell)
@@ -398,7 +505,7 @@ class Engine implements SimEngine {
 
   private visibleFrom(character: SimCharacter): VisibleEntity[] {
     return Object.values(this.chars)
-      .filter(other => other.id !== character.id && other.pos.layer === character.pos.layer)
+      .filter(other => other.status === 'active' && other.id !== character.id && other.pos.layer === character.pos.layer)
       .filter(other => dist(other.pos, character.pos) <= 6 && hasLineOfSight(this.snapshotWorld, character.pos, other.pos))
       .map(other => ({
         id: other.id,
@@ -417,38 +524,57 @@ class Engine implements SimEngine {
     return ordered.map(action => this.applyAction(action))
   }
 
+  private performMove(actor: SimCharacter, target: Coord): { outcome: 'ok' | 'blocked'; note: string; died: boolean } {
+    const resolved = this.resolveMove(actor, target)
+    if (!resolved) {
+      this.pushEvent('blocked', actor, undefined, '路被挡住了', actor.pos)
+      return { outcome: 'blocked', note: '路被挡住了', died: false }
+    }
+    const destination = resolved.target
+    const bounds = this.snapshotWorld.safeBounds
+    if (bounds && destination.layer === bounds.layer
+      && (destination.x < bounds.x0 || destination.x > bounds.x1 || destination.y < bounds.y0 || destination.y > bounds.y1)) {
+      this.dieOutside(actor)
+      return { outcome: 'ok', note: '走出校门，死了', died: true }
+    }
+    actor.pos = { ...destination }
+    const note = samePos(destination, target)
+      ? `移动到 (${destination.layer}, ${destination.x}, ${destination.y})`
+      : `向目标 (${target.layer}, ${target.x}, ${target.y}) 移动 ${resolved.steps} 格，到达 (${destination.layer}, ${destination.x}, ${destination.y})`
+    this.pushEvent('move', actor, undefined, note, destination)
+    return { outcome: 'ok', note, died: false }
+  }
+
   private applyAction(action: SimAction): ActionRecord {
     const result = (outcome: ActionRecord['outcome'], note = ''): ActionRecord => ({ action, outcome, note })
     const actor = this.chars[action.actor]
     if (!actor) return result('blocked', '角色不存在')
+    if (action.targetEntity) {
+      const target = this.resolveCharacterRef(action.targetEntity)
+      if (target) action.targetEntity = target.id
+    }
     actor.lastActedAt = this.round
     actor.lastAction = action.behavior
 
-    if (action.kind === 'idle') return result('ok', '没有行动')
+    if (action.kind === 'idle') {
+      if (!action.moveTo) return result('ok', '没有行动')
+      const moved = this.performMove(actor, action.moveTo)
+      return result(moved.died ? 'ok' : moved.outcome, moved.note)
+    }
 
     if (action.kind === 'move') {
-      const target = action.targetCell
-      if (!target || !this.canWalk(target)) {
-        this.pushEvent('blocked', actor, undefined, '路被挡住了', actor.pos)
-        return result('blocked', '路被挡住了')
+      if (!action.targetCell) {
+        this.pushEvent('blocked', actor, undefined, '没有移动目标', actor.pos)
+        return result('blocked', '没有移动目标')
       }
-      if (target.layer !== actor.pos.layer) {
-        const here = cellAt(this.snapshotWorld, actor.pos)
-        if (!here.stair || here.stair.state !== 'open' || here.stair.to !== target.layer) {
-          this.pushEvent('blocked', actor, undefined, '这里上不去', actor.pos)
-          return result('blocked', '这里上不去')
-        }
-      } else if (dist(target, actor.pos) !== 1) {
-        this.pushEvent('blocked', actor, undefined, '太远了，走不到', actor.pos)
-        return result('blocked', '太远了，走不到')
-      }
-      if (Object.values(this.chars).some(other => other.id !== actor.id && samePos(other.pos, target))) {
-        this.pushEvent('blocked', actor, undefined, '有人挡在前面', actor.pos)
-        return result('blocked', '有人挡在前面')
-      }
-      actor.pos = { ...target }
-      this.pushEvent('move', actor, undefined, `移动到 (${target.layer}, ${target.x}, ${target.y})`, target)
-      return result('ok', `移动到 (${target.layer}, ${target.x}, ${target.y})`)
+      const moved = this.performMove(actor, action.targetCell)
+      return result(moved.died ? 'ok' : moved.outcome, moved.note)
+    }
+
+    // 移动 + 行为：先移动，再在处理行为时用新位置判定视线/距离
+    if (action.moveTo) {
+      const moved = this.performMove(actor, action.moveTo)
+      if (moved.died) return result('ok', moved.note)
     }
 
     if (action.kind === 'speak') {
@@ -484,31 +610,52 @@ class Engine implements SimEngine {
 
     if (action.kind === 'attack') {
       const target = action.targetEntity ? this.chars[action.targetEntity] : undefined
-      if (!target || !this.canPerceive(actor, target)) {
-        this.pushEvent('blocked', actor, target?.id, '对方不在视线里', actor.pos)
-        return result('blocked', '对方不在视线里')
+      if (!target || target.status !== 'active') {
+        this.pushEvent('blocked', actor, target?.id, '对方已经不能应战', actor.pos)
+        return result('blocked', '对方已经不能应战')
       }
-      const method = action.method ?? '徒手'
-      const damage = method === '武器' ? 2 : 1
-      target.vitals.hp = Math.max(0, target.vitals.hp - damage)
+      const requested = action.itemId ? this.heldItem(actor, action.itemId) : undefined
+      if (action.itemId && !requested) {
+        this.pushEvent('blocked', actor, undefined, '没有拿着这件武器', actor.pos)
+        return result('blocked', '没有拿着这件武器')
+      }
+      const weapon = requested ?? (action.method === '武器'
+        ? this.heldItems(actor).find(item => item.kind === 'weapon')
+        : undefined)
+      if (action.method === '武器' && !weapon) {
+        this.pushEvent('blocked', actor, undefined, '手里没有武器', actor.pos)
+        return result('blocked', '手里没有武器')
+      }
+      const method = weapon ? '武器' : (action.method ?? '徒手')
+      const range = weapon?.range ?? 1
+      if (target.pos.layer !== actor.pos.layer
+        || dist(target.pos, actor.pos) > range
+        || !hasLineOfSight(this.snapshotWorld, actor.pos, target.pos)) {
+        this.pushEvent('blocked', actor, target.id, `够不到（射程 ${range}）`, actor.pos)
+        return result('blocked', `够不到（射程 ${range}）`)
+      }
+      const defense = this.heldItems(target).reduce((max, item) => Math.max(max, item.defense ?? 0), 0)
+      const raw = (weapon?.damage ?? (method === '武器' ? 2 : 1)) + (this.assists.get(actor.id) ?? 0)
+      const damage = Math.max(0, raw - defense)
+      this.loseHp(target, damage)
       target.attitudes[actor.id] = { stance: '敌意', text: `${actor.name}对我动过手。` }
       target.memory.push({
         versionId: `t-hit-${this.seq++}`,
         infoId: `hit-${actor.id}-${this.seq}`,
-        content: `${actor.name}用${method}攻击了我。`,
+        content: `${actor.name}用${weapon?.name ?? method}攻击了我。`,
         topics: ['攻击'],
         provenance: 'perceived',
         derivedFrom: [],
         at: this.round,
         source: actor.id,
       })
-      this.touchRelation(actor, target.id, 'harm', `${method}攻击`)
-      const note = `${method}攻击（${target.name} 生命 ${target.vitals.hp}/5）`
-      this.pushEvent('attack', actor, target.id, note, actor.pos)
-      if (target.vitals.hp === 0) {
-        target.status = 'incapacitated'
-        this.pushEvent('blocked', target, undefined, '倒下了，无法行动', target.pos)
+      this.touchRelation(actor, target.id, 'harm', `${weapon?.name ?? method}攻击`)
+      if (range > 1) {
+        this.createInfo(actor, 'sound', 700, `${actor.name}用${weapon?.name ?? method}开了火`, ['攻击'], 1)
       }
+      const guard = defense > 0 ? `，护具挡下 ${Math.min(defense, raw)}` : ''
+      const note = `${weapon?.name ?? method}攻击（${target.name} 生命 ${target.vitals.hp}/5${guard}）`
+      this.pushEvent('attack', actor, target.id, note, actor.pos)
       return result('ok', note)
     }
 
@@ -519,11 +666,20 @@ class Engine implements SimEngine {
         this.pushEvent('blocked', actor, undefined, '能力被封印', actor.pos)
         return result('blocked', '能力被封印')
       }
+      if (actor.ability.state === '暴走') {
+        actor.vitals.conditions = [...new Set([...actor.vitals.conditions, '能力暴走'])]
+        this.loseHp(actor, 1)
+        this.pushEvent('ability', actor, undefined, `能力暴走反噬（生命 ${actor.vitals.hp}/5）`, actor.pos)
+      }
       const chargeAbility = (): void => {
+        const previous = actor.ability.state
         actor.ability.charge = clamp(actor.ability.charge + 20, 0, 100)
         const next = actor.ability.charge >= 80 ? '暴走' : actor.ability.charge >= 40 ? '亢进' : '稳定'
-        if (next === '暴走' && actor.ability.state !== '暴走') {
+        if (next === '暴走' && previous !== '暴走') {
           this.pushEvent('ability', actor, undefined, `能力暴走（负荷 ${actor.ability.charge}）`, actor.pos)
+          actor.vitals.conditions = [...new Set([...actor.vitals.conditions, '能力暴走'])]
+          this.loseHp(actor, 1)
+          this.pushEvent('ability', actor, undefined, `能力反噬（生命 ${actor.vitals.hp}/5）`, actor.pos)
         }
         actor.ability.state = next
       }
@@ -573,7 +729,173 @@ class Engine implements SimEngine {
       return result('ok', '散布消息')
     }
 
+    if (action.kind === 'take') {
+      const item = this.itemRef(action.itemId)
+      if (!item) {
+        this.pushEvent('blocked', actor, undefined, '这里没有这件东西', actor.pos)
+        return result('blocked', '这里没有这件东西')
+      }
+      if (item.portable === false) {
+        this.pushEvent('blocked', actor, undefined, '拿不动', actor.pos)
+        return result('blocked', '拿不动')
+      }
+      if (item.holder === actor.id) {
+        this.pushEvent('blocked', actor, undefined, '已经在你手上', actor.pos)
+        return result('blocked', '已经在你手上')
+      }
+      if (item.holder) {
+        const holder = this.chars[item.holder]
+        if (holder?.status === 'active') {
+          this.pushEvent('blocked', actor, holder.id, `${holder.name}拿着它`, actor.pos)
+          return result('blocked', '在对方手上')
+        }
+        if (holder) holder.inventory = holder.inventory.filter(id => id !== item.id)
+      }
+      if (item.container) {
+        const fixture = this.fixtures.find(entry => entry.id === item.container)
+        if (!fixture || !this.isOpen(fixture)) {
+          this.pushEvent('blocked', actor, undefined, '容器关着', actor.pos)
+          return result('blocked', '容器关着')
+        }
+      } else if (!item.at || !samePos(item.at, actor.pos)) {
+        this.pushEvent('blocked', actor, undefined, '不在这里', actor.pos)
+        return result('blocked', '不在这里')
+      }
+      item.holder = actor.id
+      item.at = undefined
+      item.container = undefined
+      if (!actor.inventory.includes(item.id)) actor.inventory.push(item.id)
+      const note = `拿起了${item.name}`
+      actor.memory.push({
+        versionId: `t-take-${this.seq++}`,
+        infoId: `take-${item.id}-${this.seq}`,
+        content: note,
+        topics: item.kind === 'document' ? ['记录'] : [],
+        provenance: 'perceived',
+        derivedFrom: [],
+        at: this.round,
+      })
+      this.pushEvent('take', actor, undefined, note, actor.pos)
+      return result('ok', note)
+    }
+
+    if (action.kind === 'drop') {
+      const item = this.heldItem(actor, action.itemId)
+      if (!item) {
+        this.pushEvent('blocked', actor, undefined, '没拿着这件东西', actor.pos)
+        return result('blocked', '没拿着这件东西')
+      }
+      item.holder = undefined
+      item.container = undefined
+      item.at = { ...actor.pos }
+      actor.inventory = actor.inventory.filter(id => id !== item.id)
+      const note = `放下了${item.name}`
+      this.pushEvent('drop', actor, undefined, note, actor.pos)
+      return result('ok', note)
+    }
+
+    if (action.kind === 'give') {
+      const item = this.heldItem(actor, action.itemId)
+      const target = this.resolveCharacterRef(action.targetEntity)
+      if (!item) {
+        this.pushEvent('blocked', actor, undefined, '没拿着这件东西', actor.pos)
+        return result('blocked', '没拿着这件东西')
+      }
+      if (!target || target.id === actor.id || target.status !== 'active' || !this.canPerceive(actor, target)) {
+        this.pushEvent('blocked', actor, target?.id, '对方不在视线里', actor.pos)
+        return result('blocked', '对方不在视线里')
+      }
+      item.holder = target.id
+      item.at = undefined
+      item.container = undefined
+      actor.inventory = actor.inventory.filter(id => id !== item.id)
+      if (!target.inventory.includes(item.id)) target.inventory.push(item.id)
+      target.memory.push({
+        versionId: `t-give-${this.seq++}`,
+        infoId: `give-${item.id}-${this.seq}`,
+        content: `${actor.name}把${item.name}交给了我。`,
+        topics: [],
+        provenance: 'perceived',
+        derivedFrom: [],
+        at: this.round,
+        source: actor.id,
+      })
+      this.touchRelation(actor, target.id, 'help', `给了${item.name}`)
+      const note = `把${item.name}交给了${target.name}`
+      this.pushEvent('give', actor, target.id, note, actor.pos)
+      return result('ok', note)
+    }
+
     if (action.kind === 'use') {
+      const item = action.itemId ? this.heldItem(actor, action.itemId) : undefined
+      if (action.itemId) {
+        if (!item) {
+          this.pushEvent('blocked', actor, undefined, '没拿着这件东西', actor.pos)
+          return result('blocked', '没拿着这件东西')
+        }
+        if (item.kind === 'medicine') {
+          const target = action.targetEntity ? this.resolveCharacterRef(action.targetEntity) : actor
+          if (!target || (target.id !== actor.id && !this.canPerceive(actor, target))) {
+            this.pushEvent('blocked', actor, target?.id, '够不到', actor.pos)
+            return result('blocked', '够不到')
+          }
+          const heal = item.heal ?? 1
+          target.vitals.hp = Math.min(5, target.vitals.hp + heal)
+          target.memory.push({
+            versionId: `t-med-${this.seq++}`,
+            infoId: `med-${item.id}-${this.seq}`,
+            content: `${actor.name}给我用了${item.name}。`,
+            topics: ['治疗'],
+            provenance: 'perceived',
+            derivedFrom: [],
+            at: this.round,
+            source: actor.id,
+          })
+          if (target.id !== actor.id) this.touchRelation(actor, target.id, 'help', item.name)
+          this.removeItem(item)
+          const note = `${item.name}作用于${target.name}（生命 ${target.vitals.hp}/5）`
+          this.pushEvent('use', actor, target.id, note, actor.pos)
+          return result('ok', note)
+        }
+        if (item.kind === 'document' && item.document) {
+          actor.memory.push({
+            versionId: `t-read-${this.seq++}`,
+            infoId: `read-${item.id}-${this.seq}`,
+            content: item.document.content,
+            topics: item.document.topics,
+            provenance: 'perceived',
+            derivedFrom: [],
+            at: this.round,
+          })
+          const note = `读完了${item.name}`
+          this.pushEvent('use', actor, undefined, note, actor.pos)
+          return result('ok', note)
+        }
+        if (item.kind === 'key') {
+          const fixture = this.fixturesAt(actor.pos).find(entry =>
+            entry.keyId === item.id || item.unlocks === entry.id)
+          if (!fixture) {
+            this.pushEvent('blocked', actor, undefined, '这里没有对应的锁', actor.pos)
+            return result('blocked', '这里没有对应的锁')
+          }
+          if (fixture.state !== 'locked') return result('blocked', '没有上锁')
+          fixture.state = 'closed'
+          const note = `用${item.name}打开了${fixture.name}`
+          this.pushEvent('use', actor, undefined, note, actor.pos)
+          return result('ok', note)
+        }
+        if (item.kind === 'weapon') {
+          this.pushEvent('blocked', actor, undefined, '武器要用攻击动作', actor.pos)
+          return result('blocked', '武器要用攻击动作')
+        }
+        if (item.kind === 'tool') {
+          this.pushEvent('blocked', actor, undefined, '工具要用交互动作', actor.pos)
+          return result('blocked', '工具要用交互动作')
+        }
+        const note = `使用了${item.name}`
+        this.pushEvent('use', actor, undefined, note, actor.pos)
+        return result('ok', note)
+      }
       const target = action.targetEntity ? this.chars[action.targetEntity] : undefined
       if (!target || !this.canPerceive(actor, target)) {
         this.pushEvent('blocked', actor, target?.id, '够不到', actor.pos)
@@ -582,14 +904,121 @@ class Engine implements SimEngine {
       this.touchRelation(actor, target.id, action.polarity, action.behavior)
       let note = action.behavior
       if (action.polarity === 'harm') {
-        target.vitals.hp = Math.max(0, target.vitals.hp - 1)
+        this.loseHp(target, 1)
         note = `${action.behavior}（${target.name} 生命 ${target.vitals.hp}/5）`
-        if (target.vitals.hp === 0) {
-          target.status = 'incapacitated'
-          this.pushEvent('blocked', target, undefined, '倒下了，无法行动', target.pos)
-        }
       }
       this.pushEvent('use', actor, target.id, note, actor.pos)
+      return result('ok', note)
+    }
+
+    if (action.kind === 'interact') {
+      const fixture = this.fixtureRef(action.fixtureId) ?? this.fixturesAt(actor.pos)[0]
+      if (!fixture) {
+        this.pushEvent('blocked', actor, undefined, '这里没有可操作的设施', actor.pos)
+        return result('blocked', '这里没有可操作的设施')
+      }
+      if (!samePos(fixture.at, actor.pos)) {
+        this.pushEvent('blocked', actor, undefined, '设施不在这个格子', actor.pos)
+        return result('blocked', '设施不在这个格子')
+      }
+      const verb = action.verb ?? (fixture.kind === 'board'
+        ? action.text ? 'write' : 'read'
+        : fixture.kind === 'device'
+          ? 'toggle'
+          : fixture.state === 'locked' ? 'unlock' : 'open')
+      if (fixture.kind === 'device' && verb !== 'toggle') return result('blocked', '装置只能开关')
+      if (fixture.kind === 'board' && verb !== 'write' && verb !== 'read') return result('blocked', '黑板只能读或写')
+      if ((fixture.kind === 'container' || fixture.kind === 'door') && (verb === 'write' || verb === 'toggle')) {
+        return result('blocked', '这个设施不能这样操作')
+      }
+      let note = ''
+      if (verb === 'write') {
+        if (fixture.kind !== 'board') return result('blocked', '这里不能写')
+        if (!action.text) return result('blocked', '没有写内容')
+        this.createInfo(actor, 'vision', 700, action.text, action.topics ?? ['记录'], 99)
+        note = `在${fixture.name}上写下：${action.text}`
+      } else if (verb === 'read') {
+        if (fixture.kind !== 'board') return result('blocked', '这里没有可读的东西')
+        note = `查看了${fixture.name}：${fixture.description}`
+      } else if (verb === 'toggle') {
+        if (fixture.kind !== 'device') return result('blocked', '这里没有开关')
+        fixture.state = fixture.state === 'on' ? 'off' : 'on'
+        note = `${fixture.name}已${fixture.state === 'on' ? '开启' : '关闭'}`
+      } else if (verb === 'break') {
+        const tool = this.heldItems(actor).find(entry => entry.kind === 'tool' || entry.kind === 'weapon')
+        if (!tool) {
+          this.pushEvent('blocked', actor, undefined, '需要工具或武器', actor.pos)
+          return result('blocked', '需要工具或武器')
+        }
+        if (fixture.state === 'broken') return result('blocked', '已经坏了')
+        fixture.state = 'broken'
+        this.createInfo(actor, 'sound', 600, `${actor.name}用${tool.name}弄坏了${fixture.name}`, ['破坏'], 1)
+        note = `用${tool.name}撬开了${fixture.name}`
+      } else if (verb === 'unlock') {
+        if (fixture.state !== 'locked') return result('blocked', '没有上锁')
+        const key = this.heldItems(actor).find(entry =>
+          entry.kind === 'key' && (entry.unlocks === fixture.id || fixture.keyId === entry.id))
+        if (!key) {
+          this.pushEvent('blocked', actor, undefined, '没有对应的钥匙', actor.pos)
+          return result('blocked', '没有对应的钥匙')
+        }
+        fixture.state = 'closed'
+        note = `用${key.name}打开了${fixture.name}`
+      } else if (verb === 'lock') {
+        if (fixture.state === 'locked') return result('blocked', '已经锁着')
+        const key = this.heldItems(actor).find(entry =>
+          entry.kind === 'key' && (entry.unlocks === fixture.id || fixture.keyId === entry.id))
+        if (!key) return result('blocked', '没有对应的钥匙')
+        fixture.state = 'locked'
+        note = `锁上了${fixture.name}`
+      } else if (verb === 'close') {
+        if (fixture.state !== 'open') return result('blocked', '不是开着的')
+        fixture.state = 'closed'
+        note = `关上了${fixture.name}`
+      } else {
+        if (fixture.state === 'locked') {
+          this.pushEvent('blocked', actor, undefined, '锁着', actor.pos)
+          return result('blocked', '锁着')
+        }
+        if (fixture.state === 'open' || fixture.state === 'broken') {
+          note = `${fixture.name}已经开着`
+        } else {
+          fixture.state = 'open'
+          note = `打开了${fixture.name}`
+        }
+      }
+      actor.memory.push({
+        versionId: `t-fix-${this.seq++}`,
+        infoId: `fixture-${fixture.id}-${this.seq}`,
+        content: note,
+        topics: ['设施'],
+        provenance: 'perceived',
+        derivedFrom: [],
+        at: this.round,
+      })
+      this.pushEvent('interact', actor, undefined, note, actor.pos)
+      return result('ok', note)
+    }
+
+    if (action.kind === 'assist') {
+      const target = this.resolveCharacterRef(action.targetEntity)
+      if (!target || target.id === actor.id || target.status !== 'active' || !this.canPerceive(actor, target)) {
+        this.pushEvent('blocked', actor, target?.id, '没有能协助的对象', actor.pos)
+        return result('blocked', '没有能协助的对象')
+      }
+      this.touchRelation(actor, target.id, 'help', action.behavior)
+      target.memory.push({
+        versionId: `t-assist-${this.seq++}`,
+        infoId: `assist-${actor.id}-${this.seq}`,
+        content: `${actor.name}在帮我。`,
+        topics: ['协助'],
+        provenance: 'perceived',
+        derivedFrom: [],
+        at: this.round,
+        source: actor.id,
+      })
+      const note = `${actor.name}协助${target.name}`
+      this.pushEvent('assist', actor, target.id, note, actor.pos)
       return result('ok', note)
     }
 
@@ -617,6 +1046,22 @@ class Engine implements SimEngine {
     }
   }
 
+  private removeItem(item: WorldItem): void {
+    for (const character of Object.values(this.chars)) {
+      character.inventory = character.inventory.filter(id => id !== item.id)
+    }
+    this.items = this.items.filter(entry => entry.id !== item.id)
+  }
+
+  private loseHp(target: SimCharacter, amount: number): void {
+    if (amount <= 0) return
+    target.vitals.hp = Math.max(0, target.vitals.hp - amount)
+    if (target.vitals.hp === 0 && target.status === 'active') {
+      target.status = 'incapacitated'
+      this.pushEvent('blocked', target, undefined, '倒下了，无法行动', target.pos)
+    }
+  }
+
   private canPerceive(actor: SimCharacter, target: SimCharacter): boolean {
     return target.pos.layer === actor.pos.layer
       && dist(target.pos, actor.pos) <= 7
@@ -639,6 +1084,56 @@ class Engine implements SimEngine {
       bornRound: this.round,
       source: actor.id,
     })
+  }
+
+  /** 把 id、姓名、称呼解析成实体；解析不到返回 undefined。 */
+  private resolveCharacterRef(ref?: string): SimCharacter | undefined {
+    if (!ref) return undefined
+    if (this.chars[ref]) return this.chars[ref]
+    const wanted = compact(ref)
+    if (!wanted) return undefined
+    const alias = ROLE_ALIASES[wanted]
+    if (alias && this.chars[alias]) return this.chars[alias]
+    const exact = Object.values(this.chars).find(character => compact(character.name) === wanted)
+    if (exact) return exact
+    const prefixed = Object.values(this.chars).filter(character => compact(character.name).startsWith(wanted))
+    return prefixed.length === 1 ? prefixed[0] : undefined
+  }
+
+  /** 目标 id 或目标文本都能匹配；模糊包含只有唯一解时才采用。 */
+  private resolveGoal(character: SimCharacter, ref: string): Goal | undefined {
+    const wanted = compact(ref)
+    if (!wanted) return undefined
+    const exact = character.goals.find(goal => goal.id === ref || compact(goal.text) === wanted)
+    if (exact) return exact
+    const loose = character.goals.filter(goal => {
+      const text = compact(goal.text)
+      return text.includes(wanted) || wanted.includes(text)
+    })
+    return loose.length === 1 ? loose[0] : undefined
+  }
+
+  /** 归一化 LLM 的 patch：丢弃自指/无法解析的态度，目标文本转成 goal id。 */
+  private resolvePatch(character: SimCharacter, patch: StatePatch): StatePatch {
+    const next: StatePatch = { ...patch }
+    if (patch.attitudes) {
+      const attitudes = patch.attitudes.flatMap(update => {
+        const target = this.resolveCharacterRef(update.target)
+        if (!target || target.id === character.id) return []
+        return [{ ...update, target: target.id }]
+      })
+      if (attitudes.length > 0) next.attitudes = attitudes
+      else delete next.attitudes
+    }
+    if (patch.goals) {
+      const goals = patch.goals.flatMap(update => {
+        const goal = this.resolveGoal(character, update.id)
+        return goal ? [{ id: goal.id, status: update.status }] : []
+      })
+      if (goals.length > 0) next.goals = goals
+      else delete next.goals
+    }
+    return next
   }
 
   private applyPatch(character: SimCharacter, patch: StatePatch): void {
@@ -731,28 +1226,230 @@ class Engine implements SimEngine {
     return options.filter(option => this.canWalk(option))
   }
 
-  private stepToward(from: Coord, to: Coord): Coord | null {
-    if (from.layer !== to.layer) {
-      const cell = inBounds(this.snapshotWorld, from) ? cellAt(this.snapshotWorld, from) : undefined
-      if (cell?.stair && cell.stair.state === 'open') {
-        const next = { layer: cell.stair.to, x: from.x, y: from.y }
-        return this.canWalk(next) ? next : null
-      }
-      return null
+  private blockedCells(exceptId: EntityId): Set<string> {
+    const blocked = new Set<string>()
+    for (const character of Object.values(this.chars)) {
+      if (character.id === exceptId || character.status !== 'active') continue
+      blocked.add(`${character.pos.layer},${character.pos.x},${character.pos.y}`)
     }
+    return blocked
+  }
+
+  private reachable(from: Coord, maxSteps: number, blocked?: Set<string>): Coord[] {
+    const key = (cell: Coord): string => `${cell.layer},${cell.x},${cell.y}`
+    const seen = new Set([key(from)])
+    const found: Coord[] = []
+    let frontier: Coord[] = [from]
+    for (let step = 1; step <= maxSteps; step += 1) {
+      const next: Coord[] = []
+      for (const cell of frontier) {
+        for (const neighbor of this.neighbors(cell)) {
+          const neighborKey = key(neighbor)
+          if (blocked?.has(neighborKey)) continue
+          if (seen.has(neighborKey)) continue
+          seen.add(neighborKey)
+          next.push(neighbor)
+          if (!this.occupiedBy(neighbor)) found.push(neighbor)
+        }
+      }
+      frontier = next
+    }
+    return found
+  }
+
+  private moveOptions(character: SimCharacter): MoveOption[] {
+    const blocked = this.blockedCells(character.id)
+    return this.reachable(character.pos, 6, blocked)
+      .map(pos => ({ pos, name: this.locationOf(pos).name }))
+  }
+
+  /** 目标附近（同层）可走的格子，按到目标的直线距离排序。 */
+  private walkableNear(target: Coord, radius: number, blocked: Set<string>): Coord[] {
+    if (target.layer < 0 || target.layer >= this.snapshotWorld.layers) return []
+    const key = (cell: Coord): string => `${cell.layer},${cell.x},${cell.y}`
+    const x0 = Math.max(0, target.x - radius)
+    const x1 = Math.min(this.snapshotWorld.width - 1, target.x + radius)
+    const y0 = Math.max(0, target.y - radius)
+    const y1 = Math.min(this.snapshotWorld.height - 1, target.y + radius)
+    const found: Coord[] = []
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        const cell = { layer: target.layer, x, y }
+        if (!this.canWalk(cell) || blocked.has(key(cell))) continue
+        found.push(cell)
+      }
+    }
+    return found.sort((a, b) => dist(a, target) - dist(b, target))
+  }
+
+  /**
+   * 目标可走时直接规划路径；目标在墙里/被占/不可达时，
+   * 在目标附近找可走格，按“路径长度 + 到目标距离”选最优，再沿路走 3 格。
+   */
+  private resolveMove(actor: SimCharacter, requested: Coord): { target: Coord; steps: number } | null {
+    const blocked = this.blockedCells(actor.id)
+    const requestedKey = `${requested.layer},${requested.x},${requested.y}`
+    if (this.canWalk(requested) && !blocked.has(requestedKey)) {
+      const path = this.shortestPath(actor.pos, requested, 1024, blocked)
+      if (path) {
+        if (path.length === 0) return { target: { ...actor.pos }, steps: 0 }
+        const steps = Math.min(6, path.length)
+        return { target: path[steps - 1], steps }
+      }
+    }
+    const candidates = this.walkableNear(requested, 8, blocked).slice(0, 10)
+    let best: { path: Coord[]; score: number } | null = null
+    for (const candidate of candidates) {
+      const path = this.shortestPath(actor.pos, candidate, 1024, blocked)
+      if (!path || path.length === 0) continue
+      const score = path.length + dist(candidate, requested)
+      if (!best || score < best.score) best = { path, score }
+    }
+    if (best) {
+      const steps = Math.min(6, best.path.length)
+      return { target: best.path[steps - 1], steps }
+    }
+    const options = this.reachable(actor.pos, 6, blocked)
+    if (options.length === 0) return null
+    const target = options.sort((a, b) => dist(a, requested) - dist(b, requested))[0]
+    if (!target) return null
+    const path = this.shortestPath(actor.pos, target, 6, blocked)
+    return path && path.length > 0 ? { target, steps: path.length } : null
+  }
+
+  private itemRef(ref?: string): WorldItem | undefined {
+    if (!ref) return undefined
+    const byId = this.items.find(item => item.id === ref)
+    if (byId) return byId
+    const wanted = compact(ref)
+    if (!wanted) return undefined
+    const exact = this.items.find(item => compact(item.name) === wanted)
+    if (exact) return exact
+    const prefixed = this.items.filter(item => compact(item.name).startsWith(wanted))
+    return prefixed.length === 1 ? prefixed[0] : undefined
+  }
+
+  private fixtureRef(ref?: string): WorldFixture | undefined {
+    if (!ref) return undefined
+    const byId = this.fixtures.find(fixture => fixture.id === ref)
+    if (byId) return byId
+    const wanted = compact(ref)
+    if (!wanted) return undefined
+    const exact = this.fixtures.find(fixture => compact(fixture.name) === wanted)
+    if (exact) return exact
+    const prefixed = this.fixtures.filter(fixture => compact(fixture.name).startsWith(wanted))
+    return prefixed.length === 1 ? prefixed[0] : undefined
+  }
+
+  private heldItems(character: SimCharacter): WorldItem[] {
+    return character.inventory
+      .map(id => this.items.find(item => item.id === id))
+      .filter((item): item is WorldItem => item !== undefined)
+  }
+
+  private heldItem(character: SimCharacter, ref?: string): WorldItem | undefined {
+    const item = this.itemRef(ref)
+    return item && character.inventory.includes(item.id) ? item : undefined
+  }
+
+  private itemsAt(pos: Coord): WorldItem[] {
+    return this.items.filter(item => !item.holder && !item.container && item.at && samePos(item.at, pos))
+  }
+
+  private fixturesAt(pos: Coord): WorldFixture[] {
+    return this.fixtures.filter(fixture => samePos(fixture.at, pos))
+  }
+
+  private contentsOf(fixture: WorldFixture): WorldItem[] {
+    return this.items.filter(item => item.container === fixture.id)
+  }
+
+  private isOpen(fixture: WorldFixture): boolean {
+    return fixture.state === 'open' || fixture.state === 'broken'
+  }
+
+  private itemViewsFor(character: SimCharacter): ItemView[] {
+    const views: ItemView[] = []
+    const push = (item: WorldItem, place: ItemView['place'], container?: string): void => {
+      views.push({
+        id: item.id,
+        name: item.name,
+        kind: item.kind,
+        description: item.description,
+        place,
+        ...(container ? { container } : {}),
+      })
+    }
+    for (const item of this.heldItems(character)) push(item, 'held')
+    for (const item of this.itemsAt(character.pos)) push(item, 'ground')
+    for (const fixture of this.fixturesAt(character.pos)) {
+      if (!this.isOpen(fixture)) continue
+      for (const item of this.contentsOf(fixture)) push(item, 'container', fixture.id)
+    }
+    return views
+  }
+
+  private fixtureViewsFor(character: SimCharacter): FixtureView[] {
+    return this.fixturesAt(character.pos).map(fixture => ({
+      id: fixture.id,
+      name: fixture.name,
+      kind: fixture.kind,
+      state: fixture.state,
+      description: fixture.description,
+      contents: this.isOpen(fixture) ? this.contentsOf(fixture).map(item => item.id) : [],
+    }))
+  }
+
+  private occupiedBy(cell: Coord): boolean {
+    return Object.values(this.chars).some(character =>
+      character.status === 'active' && samePos(character.pos, cell))
+  }
+
+  /** BFS 最短路径（不含起点）；超出 maxSteps 返回 null。 */
+  private shortestPath(from: Coord, to: Coord, maxSteps: number, blocked?: Set<string>): Coord[] | null {
+    if (samePos(from, to)) return []
+    const key = (cell: Coord): string => `${cell.layer},${cell.x},${cell.y}`
+    const parent = new Map<string, Coord | null>()
+    parent.set(key(from), null)
+    let frontier: Coord[] = [from]
+    for (let step = 1; step <= maxSteps; step += 1) {
+      const next: Coord[] = []
+      for (const cell of frontier) {
+        for (const neighbor of this.neighbors(cell)) {
+          const neighborKey = key(neighbor)
+          if (blocked?.has(neighborKey)) continue
+          if (parent.has(neighborKey)) continue
+          parent.set(neighborKey, cell)
+          if (samePos(neighbor, to)) {
+            const path: Coord[] = []
+            let cursor: Coord | null = neighbor
+            while (cursor && !samePos(cursor, from)) {
+              path.push(cursor)
+              cursor = parent.get(key(cursor)) ?? null
+            }
+            return path.reverse()
+          }
+          next.push(neighbor)
+        }
+      }
+      frontier = next
+    }
+    return null
+  }
+
+  private stepToward(from: Coord, to: Coord): Coord | null {
+    const direct = this.shortestPath(from, to, 3)
+    if (direct && direct.length > 0) return direct[direct.length - 1]
+    const ahead = this.shortestPath(from, to, 12)
+    if (ahead && ahead.length > 0) return ahead[Math.min(2, ahead.length - 1)]
     const options = this.neighbors(from)
     if (options.length === 0) return null
     return options.sort((a, b) => dist(a, to) - dist(b, to))[0] ?? null
   }
 }
 
-export interface EngineOptions {
-  /** 每轮最多多少个角色使用传入的 mind；超出预算的角色回落 mock。 */
-  budgetPerRound?: number
-}
-
-export function createEngine(world: World, mind?: Mind, summarizer?: RoundSummarizer, options?: EngineOptions): SimEngine {
-  return new Engine(world, mind, summarizer, options)
+export function createEngine(world: World, mind?: Mind, summarizer?: RoundSummarizer): SimEngine {
+  return new Engine(world, mind, summarizer)
 }
 
 export const SIM_CHARACTER_IDS = SEEDS.map(seed => seed.id)

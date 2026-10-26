@@ -3,6 +3,9 @@
  * 浏览器侧通过 POST /evoverse/chat 调用宿主 llm；密钥在页面启动时注入。
  */
 
+import { appendFile, mkdir } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { MODEL_LABEL, resolveConfig, type EvoverseConfig } from './config'
 
 export const name = 'evoverse'
@@ -27,6 +30,7 @@ interface LlmService {
     provider: string
     model: string
     reasoningEffort?: string
+    maxTokens?: number
     system?: string
     messages: Array<{ role: 'user'; content: Array<{ type: 'text'; text: string }> }>
   }): AsyncIterable<LlmChunk>
@@ -62,6 +66,9 @@ interface HostContext {
 
 export const inject = ['llm', 'webServer']
 
+const LOG_DIR = process.env.EVOVERSE_LOG_DIR ?? join(homedir(), '.dsh', 'evoverse', 'logs')
+const SESSION_ID = /^[A-Za-z0-9._-]{1,80}$/
+
 const readBody = (req: WebRequest): Promise<string> => new Promise((resolve, reject) => {
   let body = ''
   req.on('data', chunk => {
@@ -78,7 +85,7 @@ const readBody = (req: WebRequest): Promise<string> => new Promise((resolve, rej
 export function apply(ctx: HostContext, config?: Config): void {
   const resolved = resolveConfig(config)
   const key = globalThis.crypto.randomUUID().replaceAll('-', '')
-  const line = `evoverse: model=${resolved.provider}/${resolved.model} (${MODEL_LABEL}) reasoningEffort=${resolved.reasoningEffort} bridge=/evoverse/chat`
+  const line = `evoverse: model=${resolved.provider}/${resolved.model} (${MODEL_LABEL}) reasoningEffort=${resolved.reasoningEffort} bridge=/evoverse/chat log=${LOG_DIR}`
   ctx.logger?.info?.(line)
   console.log(line)
 
@@ -87,7 +94,7 @@ export function apply(ctx: HostContext, config?: Config): void {
     table.push({ kind: 'global', name: 'EVOVERSE_BRIDGE_KEY', value: key })
   })
 
-  const register = (): (() => void) => ctx.webServer.register({
+  const registerChat = (): (() => void) => ctx.webServer.register({
     kind: 'exact',
     path: '/evoverse/chat',
     handler: async (req, res) => {
@@ -128,6 +135,7 @@ export function apply(ctx: HostContext, config?: Config): void {
           provider: resolved.provider,
           model: resolved.model,
           reasoningEffort: resolved.reasoningEffort,
+          maxTokens: resolved.maxTokens,
           ...(system.length > 0 ? { system } : {}),
           messages: userMessages,
         })) {
@@ -143,6 +151,55 @@ export function apply(ctx: HostContext, config?: Config): void {
       }
     },
   })
+
+  const registerLog = (): (() => void) => ctx.webServer.register({
+    kind: 'exact',
+    path: '/evoverse/log',
+    handler: async (req, res) => {
+      if (req.method !== 'POST') {
+        res.writeHead(405, { 'content-type': 'application/json; charset=utf-8' })
+        res.end('{"error":"method not allowed"}')
+        return
+      }
+      if (req.headers['x-evoverse-key'] !== key) {
+        res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' })
+        res.end('{"error":"forbidden"}')
+        return
+      }
+      try {
+        const data = JSON.parse(await readBody(req)) as { session?: unknown; lines?: unknown }
+        const session = typeof data.session === 'string' ? data.session : ''
+        if (!SESSION_ID.test(session)) {
+          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+          res.end('{"error":"bad session"}')
+          return
+        }
+        if (!Array.isArray(data.lines) || data.lines.length === 0 || data.lines.length > 200) {
+          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+          res.end('{"error":"bad lines"}')
+          return
+        }
+        await mkdir(LOG_DIR, { recursive: true })
+        const file = join(LOG_DIR, `${session}.jsonl`)
+        const text = `${data.lines.map(item => JSON.stringify(item)).join('\n')}\n`
+        await appendFile(file, text, 'utf8')
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: true, file, dir: LOG_DIR, bytes: Buffer.byteLength(text) }))
+      } catch (error) {
+        res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }))
+      }
+    },
+  })
+
+  const register = (): (() => void) => {
+    const disposeChat = registerChat()
+    const disposeLog = registerLog()
+    return () => {
+      disposeChat()
+      disposeLog()
+    }
+  }
 
   if (ctx.effect) ctx.effect(() => register())
   else register()

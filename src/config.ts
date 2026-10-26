@@ -6,12 +6,15 @@ export interface EvoverseConfig {
   provider: string
   model: string
   reasoningEffort: ReasoningEffort
+  /** 单次调用的输出上限，控制延迟 */
+  maxTokens: number
 }
 
 export const DEFAULT_CONFIG: EvoverseConfig = {
   provider: 'deepseek-account',
   model: 'deepseek-flash',
   reasoningEffort: 'low',
+  maxTokens: 2500,
 }
 
 export function resolveConfig(input?: Partial<EvoverseConfig>): EvoverseConfig {
@@ -22,6 +25,9 @@ export function resolveConfig(input?: Partial<EvoverseConfig>): EvoverseConfig {
     reasoningEffort: reasoning === 'low' || reasoning === 'medium' || reasoning === 'high'
       ? reasoning
       : DEFAULT_CONFIG.reasoningEffort,
+    maxTokens: typeof input?.maxTokens === 'number' && input.maxTokens > 0
+      ? Math.floor(input.maxTokens)
+      : DEFAULT_CONFIG.maxTokens,
   }
 }
 

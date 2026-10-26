@@ -185,6 +185,38 @@ export function Map2D({ world, layer, field, channel, selected, onSelect, resetS
       ctx.stroke()
     }
 
+    for (const fixture of world.fixtures ?? []) {
+      if (fixture.at.layer !== layer) continue
+      const px = ox + (fixture.at.x + 0.5) * scale
+      const py = oy + (fixture.at.y + 0.5) * scale
+      const side = Math.max(4, Math.min(11, scale * 0.28))
+      ctx.fillStyle = fixture.state === 'locked'
+        ? '#d9776a'
+        : fixture.state === 'open' || fixture.state === 'broken' ? '#6fbf8b' : '#6fb7c9'
+      ctx.strokeStyle = 'rgba(10, 14, 18, 0.8)'
+      ctx.lineWidth = 1
+      ctx.fillRect(px - side / 2, py - side / 2, side, side)
+      ctx.strokeRect(px - side / 2, py - side / 2, side, side)
+    }
+
+    for (const item of world.items ?? []) {
+      if (item.holder || item.container || !item.at || item.at.layer !== layer) continue
+      const px = ox + (item.at.x + 0.5) * scale
+      const py = oy + (item.at.y + 0.5) * scale
+      const side = Math.max(3, Math.min(8, scale * 0.2))
+      ctx.beginPath()
+      ctx.moveTo(px, py - side)
+      ctx.lineTo(px + side, py)
+      ctx.lineTo(px, py + side)
+      ctx.lineTo(px - side, py)
+      ctx.closePath()
+      ctx.fillStyle = '#e6c26a'
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(10, 14, 18, 0.8)'
+      ctx.lineWidth = 1
+      ctx.stroke()
+    }
+
     for (const character of world.characters) {
       if (character.pos.layer !== layer) continue
       const px = ox + (character.pos.x + 0.5) * scale

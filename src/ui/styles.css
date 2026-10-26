@@ -339,8 +339,20 @@ kbd {
 .log-toolbar {
   display: flex;
   align-items: center;
+  gap: 10px;
   justify-content: space-between;
   margin-bottom: 8px;
+}
+
+.log-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-file {
+  margin: -2px 0 8px;
+  overflow: hidden;
+  color: var(--evo-dim);
+  font-family: var(--evo-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-round { border-bottom: 1px solid var(--evo-line); padding: 2px 0; }
@@ -393,6 +405,10 @@ kbd {
 /* ---------- usage ---------- */
 
 .usage-badge { color: #8fd3a8; }
+.log-badge.saved { color: #8fd3a8; }
+.log-badge.saving { color: #d8c07a; }
+.log-badge.error { color: #ff8f8f; }
+.log-badge.unavailable { color: #b08a5a; }
 
 .usage-grid {
   display: grid;

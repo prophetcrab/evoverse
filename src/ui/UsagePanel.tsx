@@ -59,7 +59,7 @@ export function UsagePanel({ usage }: Props) {
       )}
 
       <div className="muted footnote">
-        每轮最多 3 个角色走模型（感受 + 思考 + 行动），其余回落确定性思考层；每轮另有 1 次异步总结。
+        每轮最多 2 个角色走模型（感受 + 思考 + 行动），其余回落确定性思考层；每轮另有 1 次异步总结。
       </div>
     </div>
   )

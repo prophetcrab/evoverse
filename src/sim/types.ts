@@ -1,4 +1,4 @@
-import type { Channel, Coord } from '../world/types'
+import type { Channel, Coord, FixtureKind, FixtureState, ItemKind } from '../world/types'
 
 export type EntityId = string
 export type NeedKey = 'safety' | 'status' | 'curiosity'
@@ -61,7 +61,7 @@ export interface SimCharacter {
   controller: 'agent' | 'sim'
   initiative: number
   pos: Coord
-  status: 'active' | 'incapacitated'
+  status: 'active' | 'incapacitated' | 'dead'
   /** 生命值：0..5，归零即失去行动能力 */
   vitals: { hp: number; conditions: string[] }
   ability: AbilityState
@@ -71,6 +71,8 @@ export interface SimCharacter {
   attitudes: Record<EntityId, Attitude>
   relations: Record<EntityId, Relation>
   presentation: { description: string; overrides: boolean; at: number }
+  /** 携带的物品 id */
+  inventory: string[]
   memory: MemoryEntry[]
   lastActedAt: number
   lastThought: string | null
@@ -78,11 +80,14 @@ export interface SimCharacter {
   lastDigest: string[]
 }
 
-export type ActionKind = 'move' | 'speak' | 'tell' | 'attack' | 'ability' | 'use' | 'idle'
+export type ActionKind =
+  | 'move' | 'speak' | 'tell' | 'attack' | 'ability'
+  | 'take' | 'drop' | 'give' | 'use' | 'interact' | 'assist' | 'idle'
 
 export type TellMode = '告知' | '询问' | '请求' | '威胁'
 export type AttackMethod = '徒手' | '武器' | '推搡'
 export type AbilityScope = 'self' | 'other' | 'world' | 'info'
+export type InteractVerb = 'open' | 'close' | 'lock' | 'unlock' | 'break' | 'write' | 'read' | 'toggle'
 
 export interface Ability {
   scope: AbilityScope
@@ -106,12 +111,20 @@ export interface SimAction {
   method?: AttackMethod
   /** ability 的作用域、名称与内容 */
   ability?: Ability
+  /** 物品动作的 id */
+  itemId?: string
+  /** 设施交互的 id */
+  fixtureId?: string
+  /** 设施交互方式 */
+  verb?: InteractVerb
+  /** 本轮先移动到这里，再执行上面的行为；move-only 用 kind=move + targetCell */
+  moveTo?: Coord
   behavior: string
   polarity: 'help' | 'harm' | 'neutral'
 }
 
 export interface StatePatch {
-  attitudes?: Array<{ target: EntityId; stance?: Stance; text?: string }>
+  attitudes?: Array<{ target: EntityId | string; stance?: Stance; text?: string }>
   attention?: Array<{ topic: string; weight: number }>
   goals?: Array<{ id: string; status: Goal['status'] }>
   /** 需求增量：行动会释放压力，所以这里通常是负值 */
@@ -128,17 +141,23 @@ export interface Candidate {
   topics: string[]
   strength: number
   source?: EntityId
+  /** 声音等信息的来源角色名，便于 feel 识别“谁说的” */
+  sourceName?: string
 }
 
 export interface FeelInput {
   self: SimCharacter
   candidates: Candidate[]
+  /** 当前视野内的角色（同层、视线内、6 格内） */
+  visible: VisibleEntity[]
   location: { name: string; note: string }
   round: number
 }
 
 export interface FeelOutput {
   remember: string[]
+  /** 选择真正会留意的在场角色，写成私人记忆 */
+  rememberPeople?: EntityId[]
   attention?: Array<{ topic: string; weight: number }>
 }
 
@@ -150,11 +169,40 @@ export interface VisibleEntity {
   attitude: Attitude
 }
 
+export interface MoveOption {
+  pos: Coord
+  name: string
+}
+
+export interface ItemView {
+  id: string
+  name: string
+  kind: ItemKind
+  description: string
+  place: 'held' | 'ground' | 'container'
+  container?: string
+}
+
+export interface FixtureView {
+  id: string
+  name: string
+  kind: FixtureKind
+  state: FixtureState
+  description: string
+  contents: string[]
+}
+
 export interface ThinkInput {
   self: SimCharacter
   digest: string[]
   visible: VisibleEntity[]
   location: { name: string; note: string }
+  /** 本轮最多 3 步可到达的空格（目标格用 pos） */
+  moves: MoveOption[]
+  /** 背包、当前格地面与打开容器里的物品 */
+  items: ItemView[]
+  /** 当前格的设施 */
+  fixtures: FixtureView[]
   round: number
 }
 
@@ -172,6 +220,9 @@ export interface ThinkOutput {
 export interface ActInput {
   self: SimCharacter
   intention: SimAction
+  moves: MoveOption[]
+  items: ItemView[]
+  fixtures: FixtureView[]
   round: number
 }
 
@@ -187,8 +238,9 @@ export interface Mind {
 }
 
 export type SimEventKind =
-  | 'speak' | 'tell' | 'move' | 'attack' | 'ability' | 'use'
-  | 'think' | 'reflect' | 'blocked'
+  | 'speak' | 'tell' | 'move' | 'attack' | 'ability'
+  | 'take' | 'drop' | 'give' | 'use' | 'interact' | 'assist'
+  | 'think' | 'reflect' | 'death' | 'blocked'
 
 export interface SimEvent {
   seq: number

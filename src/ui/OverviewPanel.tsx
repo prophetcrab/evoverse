@@ -49,7 +49,7 @@ export function OverviewPanel({ sim, world, onSelect }: Props) {
             </span>
             <span className="roster-meta">
               层 {character.pos.layer} · ({character.pos.x}, {character.pos.y}) · 生命 {character.vitals.hp}/5 · 记忆 {character.memory.length}
-              {character.status !== 'active' ? ' · 倒下' : ''}
+              {character.status === 'dead' ? ' · 死亡' : character.status !== 'active' ? ' · 倒下' : ''}
             </span>
             <span className="roster-meta">
               能力 {character.ability.name} · {character.ability.state} · 负荷 {character.ability.charge}

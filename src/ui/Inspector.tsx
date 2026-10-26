@@ -120,6 +120,19 @@ export function Inspector({ world, layer, field, channel, selected, sim, records
 
         {simChar && (
           <>
+            <div className="section-label">携带</div>
+            {simChar.inventory.length === 0 && <div className="muted">空手</div>}
+            {simChar.inventory.map(id => {
+              const item = world.items?.find(entry => entry.id === id)
+              if (!item) return null
+              return (
+                <div className="info-row" key={item.id} title={item.description}>
+                  <span className="info-label">{item.name}</span>
+                  <span className="dim">{item.kind}</span>
+                </div>
+              )
+            })}
+
             <div className="section-label">需求</div>
             <Row label="安全" value={String(Math.round(simChar.needs.safety))} />
             <Row label="地位" value={String(Math.round(simChar.needs.status))} />
@@ -210,6 +223,36 @@ export function Inspector({ world, layer, field, channel, selected, sim, records
           </div>
         ))}
 
+        <div className="section-label">地上物品</div>
+        {((world.items ?? []).filter(item => !item.holder && !item.container && item.at
+          && item.at.layer === selected.at.layer && item.at.x === selected.at.x && item.at.y === selected.at.y)).length === 0
+          && <div className="muted">无</div>}
+        {(world.items ?? []).filter(item => !item.holder && !item.container && item.at
+          && item.at.layer === selected.at.layer && item.at.x === selected.at.x && item.at.y === selected.at.y)
+          .map(item => (
+            <div className="info-row" key={item.id} title={item.description}>
+              <span className="info-label">{item.name}</span>
+              <span className="dim">{item.kind}</span>
+            </div>
+          ))}
+
+        <div className="section-label">设施</div>
+        {((world.fixtures ?? []).filter(fixture => fixture.at.layer === selected.at.layer
+          && fixture.at.x === selected.at.x && fixture.at.y === selected.at.y)).length === 0
+          && <div className="muted">无</div>}
+        {(world.fixtures ?? []).filter(fixture => fixture.at.layer === selected.at.layer
+          && fixture.at.x === selected.at.x && fixture.at.y === selected.at.y)
+          .map(fixture => {
+            const contents = (world.items ?? []).filter(item => item.container === fixture.id)
+            const open = fixture.state === 'open' || fixture.state === 'broken'
+            return (
+              <div className="info-row" key={fixture.id} title={fixture.description}>
+                <span className="info-label">{fixture.name}</span>
+                <span className="dim">{fixture.kind} · {fixture.state}{open && contents.length > 0 ? ` · ${contents.map(item => item.name).join('、')}` : ''}</span>
+              </div>
+            )
+          })}
+
         {(() => {
           const record = records && records.length > 0 ? records[records.length - 1] : null
           const same = (a: { layer: number; x: number; y: number }): boolean =>
@@ -273,9 +316,10 @@ function Empty({ layer }: { layer?: number }) {
       <div className="hint-row"><kbd>Esc</kbd><span>取消选中</span></div>
       <div className="section-label">图例</div>
       <div className="legend-row"><span className="swatch wall" />墙</div>
-      <div className="legend-row"><span className="swatch door" />门</div>
       <div className="legend-row"><span className="swatch window" />窗</div>
       <div className="legend-row"><span className="swatch stair" />楼梯</div>
+      <div className="legend-row"><span className="swatch" style={{ background: '#e6c26a' }} />物品</div>
+      <div className="legend-row"><span className="swatch" style={{ background: '#6fb7c9' }} />设施</div>
       <div className="legend-row"><span className="swatch agent" />实心 = 真实会话</div>
       <div className="legend-row"><span className="swatch sim" />空心 = 模拟</div>
       {layer !== undefined && <div className="muted footnote">当前第 {layer} 层</div>}
