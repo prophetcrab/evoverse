@@ -2,8 +2,25 @@
   "name": "evoverse",
   "version": "0.0.1",
   "description": "agent 世界自演进引擎 —— dsh 插件",
+  "license": "MIT",
+  "author": "prophetcrab",
+  "homepage": "https://github.com/prophetcrab/evoverse#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prophetcrab/evoverse.git"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "agents",
+    "simulation",
+    "world"
+  ],
+  "engines": {
+    "node": ">=24.9.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
   "type": "module",
-  "private": true,
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
